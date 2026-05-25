@@ -1,0 +1,65 @@
+# ====================================================
+# Channel Configuration
+# ====================================================
+
+channels:
+  tech_channel:
+    type: "tutorial"
+    name: "Tech Tutorials"
+    social_footer: "assets/social/tech.png"
+    intro_text: "Learn Faster"
+    hook_keywords:
+      - "how to"
+      - "mistake"
+      - "shortcut"
+      - "tip"
+      - "secret"
+      - "why"
+      - "important"
+    upload_enabled: true
+    youtube:
+      client_secrets: "configs/client_secret_tech.json"
+      credentials: "configs/credentials_tech.json"
+      default_tags:
+        - "tutorial"
+        - "programming"
+        - "tech"
+      default_category: "28"
+      privacy_status: "private"
+      schedule_delay_hours: 24
+
+  travel_channel:
+    type: "gopro"
+    name: "Adventure Vlogs"
+    social_footer: "assets/social/travel.png"
+    intro_text: "Adventure Begins"
+    hook_keywords:
+      - "amazing"
+      - "incredible"
+      - "look at this"
+    upload_enabled: false
+    youtube:
+      client_secrets: "configs/client_secret_travel.json"
+      credentials: "configs/credentials_travel.json"
+      default_tags:
+        - "travel"
+        - "adventure"
+        - "gopro"
+      default_category: "19"
+      privacy_status: "private"
+      schedule_delay_hours: 48
+
+  vertical_channel:
+    type: "vertical"
+    name: "Vertical Shorts"
+    social_footer: "assets/social/vertical.png"
+    intro_text: ""
+    upload_enabled: false
+    youtube:
+      client_secrets: "configs/client_secret_vertical.json"
+      credentials: "configs/credentials_vertical.json"
+      default_tags:
+        - "shorts"
+      default_category: "22"
+      privacy_status: "private"
+      schedule_delay_hours: 12

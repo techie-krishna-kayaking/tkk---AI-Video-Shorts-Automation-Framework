@@ -1,0 +1,37 @@
+# Byte-compiled / optimized
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+.venv
+env/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Temp and output
+temp/
+output/
+logs/
+
+# Credentials (NEVER commit)
+configs/client_secret_*.json
+configs/credentials_*.json
+*.credentials.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Large files
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.wav
+*.mp3

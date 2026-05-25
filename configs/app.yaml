@@ -1,0 +1,80 @@
+# ====================================================
+# AI Video Shorts Automation - Application Config
+# ====================================================
+
+app:
+  name: "AI Video Shorts Automation"
+  version: "1.0.0"
+  temp_dir: "temp"
+  log_dir: "logs"
+  log_level: "INFO"
+
+input:
+  base_dir: "input"
+  tutorials_dir: "input/tutorials"
+  gopro_dir: "input/gopro"
+  vertical_dir: "input/vertical"
+
+output:
+  base_dir: "output"
+  format: "mp4"
+  naming_pattern: "{video_name}_part{number:03d}"
+
+video:
+  output_width: 1080
+  output_height: 1920
+  fps: 30
+  codec: "h264"
+  audio_codec: "aac"
+  audio_bitrate: "192k"
+  video_bitrate: "8M"
+  preset: "medium"
+  crf: 18
+
+shorts:
+  min_duration: 15
+  max_duration: 60
+  target_duration: 45
+  silence_threshold: -40
+  silence_min_duration: 2.0
+  overlap_seconds: 0.5
+
+transcription:
+  model: "base"
+  language: "en"
+  word_timestamps: true
+  device: "auto"
+
+captions:
+  enabled: true
+  style: "modern"
+  font: "assets/fonts/Montserrat-Bold.ttf"
+  font_size: 48
+  font_color: "#FFFFFF"
+  outline_color: "#000000"
+  outline_width: 3
+  position: "center"
+  max_words_per_line: 6
+
+rendering:
+  gpu_enabled: true
+  gpu_encoder: "h264_nvenc"
+  cpu_encoder: "libx264"
+  threads: 0
+  hwaccel: "cuda"
+
+processing:
+  batch_size: 5
+  max_workers: 4
+  retry_attempts: 3
+  retry_delay: 5
+
+watcher:
+  enabled: false
+  poll_interval: 10
+  recursive: true
+
+assets:
+  social_dir: "assets/social"
+  fonts_dir: "assets/fonts"
+  overlays_dir: "assets/overlays"
