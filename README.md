@@ -105,13 +105,87 @@
 ## TABLE OF CONTENTS
 
 1. [Tech Stack](#️-tech-stack)
-2. [macOS Setup (All Steps)](#-macos-complete-setup)
-3. [Windows Setup (All Steps)](#-windows-complete-setup)
-4. [YouTube API & Credentials Setup](#youtube-api--credentials-setup)
-5. [Configuration Reference](#configuration-reference)
-6. [Architecture & Pipeline](#architecture)
-7. [Docker (Linux Servers)](#docker-linux-servers)
-8. [Troubleshooting](#troubleshooting)
+2. [Multi-Channel Architecture](#-multi-channel-architecture)
+3. [macOS Setup (All Steps)](#-macos-complete-setup)
+4. [Windows Setup (All Steps)](#-windows-complete-setup)
+5. [YouTube API & Credentials Setup](#youtube-api--credentials-setup)
+6. [Configuration Reference](#configuration-reference)
+7. [Architecture & Pipeline](#architecture)
+8. [Docker (Linux Servers)](#docker-linux-servers)
+9. [Troubleshooting](#troubleshooting)
+
+---
+
+## 🎛️ Multi-Channel Architecture
+
+The framework supports **multiple YouTube channels**, each with its own input folder, output folder, socials overlay, and YouTube credentials.
+
+### Folder Structure
+
+```
+input/
+├── krgd_vlogs/                  ← Channel: krgd_vlogs
+│   ├── trip_01/                 ← Nested subfolders supported
+│   │   ├── gopro_beach.mp4
+│   │   └── gopro_sunset.mp4
+│   └── trip_02/
+│       └── drone_flight.mp4
+├── techie_krishna_kayaking/     ← Channel: techie_krishna_kayaking
+│   └── python_tips.mp4
+├── krishna_kayaking/            ← Channel: krishna_kayaking
+│   └── river_run.mp4
+└── tkk_live_shorts/             ← Channel: tkk_live_shorts
+    └── live_stream_clip.mp4
+
+output/                          ← Flat per-channel output
+├── krgd_vlogs/
+│   ├── trip_01_gopro_beach_part001.mp4
+│   ├── trip_01_gopro_beach_part001.json
+│   ├── trip_01_gopro_sunset_part001.mp4
+│   └── trip_02_drone_flight_part001.mp4
+├── techie_krishna_kayaking/
+│   └── python_tips_part001.mp4
+├── krishna_kayaking/
+│   └── river_run_part001.mp4
+└── tkk_live_shorts/
+    └── live_stream_clip_part001.mp4
+
+assets/social/                   ← Per-channel socials overlays
+├── krgd_vlogs_socials.png
+├── tkk_socials.png
+└── kk_socials.png
+```
+
+### Key Concepts
+
+- **Channel = input folder + output folder + socials image + YouTube credentials**
+- Videos in nested subfolders are discovered recursively (e.g., `trip_01/`, `trip_02/`)
+- Output is **flat per channel** — subfolder names are prefixed to the video name:
+  `input/krgd_vlogs/trip_01/beach.mp4` → `output/krgd_vlogs/trip_01_beach_part001.mp4`
+- Each channel has its own socials overlay PNG (branding image burned into shorts)
+- YouTube credentials are per-channel for multi-account upload support
+
+### CLI Quick Reference
+
+```bash
+# List all configured channels
+python -m app.main channels
+
+# Process a single video for a channel
+python -m app.main process input/krgd_vlogs/trip_01/beach.mp4 --channel krgd_vlogs
+
+# Batch process all videos in a channel (recursive)
+python -m app.main batch --channel krgd_vlogs --fast --max-clips 3
+
+# Batch with explicit directory
+python -m app.main batch input/tutorials/ --channel techie_krishna_kayaking
+
+# Watch a channel's input folder for new videos
+python -m app.main watch --channel krgd_vlogs --fast
+
+# Fast mode: uses tiny Whisper model + MPS GPU, ~2x faster
+python -m app.main process video.mp4 --channel krgd_vlogs --fast
+```
 
 ---
 ---
@@ -202,23 +276,24 @@ curl -L "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserra
 
 ---
 
-### Step 6: Add Your Social Footer Image
+### Step 6: Add Your Social Footer Images
 
-Create or place a PNG image (1080px wide, ~150-200px tall) in the assets folder.
+Create or place a PNG image (1080px wide, ~150-200px tall) per channel in the assets folder.
 This image appears at the bottom of every generated short (your logo, social handles, etc).
 
 ```bash
-# Example: copy your prepared image
-cp /path/to/your/channel_footer.png assets/social/tech.png
+# One image per channel — referenced in configs/channels.yaml
+cp /path/to/your/my_vlogs_footer.png assets/social/my_vlogs_socials.png
+cp /path/to/your/my_tutorials_footer.png assets/social/my_tutorials_socials.png
 ```
 
-If you don't have one yet, the framework works without it — just leave the `social_footer` field empty in config.
+If you don't have one yet, the framework works without it — just leave `socials_file` empty in channel config.
 
 ---
 
 ### Step 7: Configure Your Channels
 
-Edit `configs/channels.yaml`:
+Edit `configs/channels.yaml` to add your channels:
 
 ```bash
 open configs/channels.yaml
@@ -226,24 +301,23 @@ open configs/channels.yaml
 # Or: nano configs/channels.yaml
 ```
 
-Set your channel name, type, and preferences. See [Configuration Reference](#configuration-reference) below for all options.
+Each channel defines its own input folder, output folder, socials image, and YouTube credentials.
+See [Configuration Reference](#configuration-reference) below for all fields.
 
 Edit `configs/app.yaml` if you want to change processing settings (defaults work fine to start).
 
 ---
 
-### Step 8: Place Videos in the Input Folder
+### Step 8: Place Videos in the Channel Input Folders
 
 ```bash
-# For tutorial/OBS recordings (16:9):
-cp /path/to/your/tutorial.mp4 input/tutorials/
-
-# For GoPro/action videos (16:9):
-cp /path/to/your/gopro_clip.mp4 input/gopro/
-
-# For already-vertical videos (9:16):
-cp /path/to/your/vertical.mp4 input/vertical/
+# Videos go into each channel's input folder (supports nested subfolders):
+cp /path/to/your/tutorial.mp4 input/techie_krishna_kayaking/
+cp /path/to/your/gopro_clip.mp4 input/krgd_vlogs/trip_01/
+cp /path/to/your/river_run.mp4 input/krishna_kayaking/summer_2025/
 ```
+
+Nested folders like `trip_01/` are supported — the subfolder name is prefixed to the output filename.
 
 ---
 
@@ -253,25 +327,34 @@ cp /path/to/your/vertical.mp4 input/vertical/
 # Make sure your venv is active!
 source .venv/bin/activate
 
-# Process a single video
-python -m app.main process input/tutorials/my_video.mp4 --channel tech_channel
+# List all configured channels and video counts
+python -m app.main channels
 
-# Process all videos in a folder
-python -m app.main batch input/tutorials/ --channel tech_channel
+# Process a single video (specify channel for output routing)
+python -m app.main process input/krgd_vlogs/trip_01/beach.mp4 --channel krgd_vlogs
+
+# Fast mode — uses tiny Whisper model + MPS GPU, ~2x faster
+python -m app.main process input/krgd_vlogs/trip_01/beach.mp4 --channel krgd_vlogs --fast
+
+# Batch process all videos in a channel (recursive subfolder discovery)
+python -m app.main batch --channel krgd_vlogs --fast --max-clips 3
+
+# Batch with explicit directory
+python -m app.main batch input/tutorials/ --channel techie_krishna_kayaking
 
 # Check video info first (no processing)
-python -m app.main info input/tutorials/my_video.mp4
+python -m app.main info input/krgd_vlogs/trip_01/beach.mp4
 
-# Watch mode — auto-process new videos dropped into folder
-python -m app.main watch --channel tech_channel --dir input/tutorials
+# Watch mode — auto-process new videos dropped into channel folder
+python -m app.main watch --channel krgd_vlogs --fast
 # Press Ctrl+C to stop
 
 # Upload a generated short (requires YouTube API setup — see below)
-python -m app.main upload output/my_video/my_video_part001.mp4 \
-    --channel tech_channel --title "Quick Python Tip"
+python -m app.main upload output/krgd_vlogs/trip_01_beach_part001.mp4 \
+    --channel krgd_vlogs --title "Epic Beach Adventure"
 
 # Schedule multiple uploads (one per day)
-python -m app.main schedule output/my_video/ --channel tech_channel --interval 24
+python -m app.main schedule output/krgd_vlogs/ --channel krgd_vlogs --interval 24
 
 # Execute all scheduled uploads
 python -m app.main execute-schedule
@@ -282,14 +365,14 @@ python -m app.main execute-schedule
 ### Step 10: Check Your Output
 
 ```bash
-ls output/my_video/
+ls output/krgd_vlogs/
 
-# You'll see:
-# my_video_part001.mp4   ← Ready-to-upload short
-# my_video_part001.srt   ← Subtitles (SRT)
-# my_video_part001.ass   ← Subtitles (styled ASS)
-# my_video_part001.json  ← Metadata (score, timestamps, transcript)
-# my_video_part002.mp4
+# Flat per-channel output (subfolder names prefixed):
+# trip_01_beach_part001.mp4    ← Ready-to-upload short
+# trip_01_beach_part001.srt    ← Subtitles (SRT)
+# trip_01_beach_part001.ass    ← Subtitles (styled ASS)
+# trip_01_beach_part001.json   ← Metadata (score, timestamps, transcript)
+# trip_01_beach_part002.mp4
 # ...
 ```
 
@@ -302,8 +385,9 @@ brew install python@3.11 ffmpeg
 cd tkk-try && python3 -m venv .venv && source .venv/bin/activate
 pip install --upgrade pip && pip install -r requirements.txt && pip install torch torchaudio
 curl -L "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Bold.ttf" -o assets/fonts/Montserrat-Bold.ttf
-cp ~/Downloads/my_tutorial.mp4 input/tutorials/
-python -m app.main process input/tutorials/my_tutorial.mp4
+cp ~/Downloads/my_tutorial.mp4 input/techie_krishna_kayaking/
+python -m app.main channels
+python -m app.main process input/techie_krishna_kayaking/my_tutorial.mp4 --channel techie_krishna_kayaking --fast
 ```
 
 ---
@@ -444,17 +528,18 @@ Invoke-WebRequest -Uri "https://github.com/JulietaUla/Montserrat/raw/master/font
 
 ---
 
-### Step 7: Add Your Social Footer Image
+### Step 7: Add Your Social Footer Images
 
-Create or place a PNG image (1080px wide, ~150-200px tall) in the assets folder.
+Create or place a PNG image (1080px wide, ~150-200px tall) per channel in the assets folder.
 This image appears at the bottom of every generated short (your logo, social handles, etc).
 
 ```powershell
-# Example: copy your prepared image
-Copy-Item "C:\path\to\your\channel_footer.png" -Destination "assets\social\tech.png"
+# One image per channel — referenced in configs\channels.yaml
+Copy-Item "C:\path\to\your\my_vlogs_footer.png" -Destination "assets\social\my_vlogs_socials.png"
+Copy-Item "C:\path\to\your\my_tutorials_footer.png" -Destination "assets\social\my_tutorials_socials.png"
 ```
 
-If you don't have one yet, the framework works without it — just leave the `social_footer` field empty in config.
+If you don't have one yet, the framework works without it — just leave `socials_file` empty in channel config.
 
 ---
 
@@ -466,26 +551,24 @@ notepad configs\channels.yaml
 # Or: code configs\channels.yaml
 ```
 
-Set your channel name, type, and preferences. See [Configuration Reference](#configuration-reference) below.
+Each channel defines its own input folder, output folder, socials image, and YouTube credentials.
+See [Configuration Reference](#configuration-reference) below for all fields.
 
 Also edit `configs\app.yaml` if you want to change processing settings (defaults work fine to start).
 
 ---
 
-### Step 9: Place Videos in the Input Folder
+### Step 9: Place Videos in the Channel Input Folders
 
 ```powershell
-# For tutorial/OBS recordings (16:9):
-Copy-Item "C:\path\to\your\tutorial.mp4" -Destination "input\tutorials\"
-
-# For GoPro/action videos (16:9):
-Copy-Item "C:\path\to\your\gopro_clip.mp4" -Destination "input\gopro\"
-
-# For already-vertical videos (9:16):
-Copy-Item "C:\path\to\your\vertical.mp4" -Destination "input\vertical\"
+# Videos go into each channel's input folder (supports nested subfolders):
+Copy-Item "C:\path\to\your\tutorial.mp4" -Destination "input\techie_krishna_kayaking\"
+Copy-Item "C:\path\to\your\gopro_clip.mp4" -Destination "input\krgd_vlogs\trip_01\"
+Copy-Item "C:\path\to\your\river_run.mp4" -Destination "input\krishna_kayaking\summer_2025\"
 ```
 
 Or simply **drag-and-drop** video files into the folders using File Explorer.
+Nested folders like `trip_01\` are supported — the subfolder name is prefixed to the output filename.
 
 ---
 
@@ -495,25 +578,34 @@ Or simply **drag-and-drop** video files into the folders using File Explorer.
 # Make sure your venv is active!
 .venv\Scripts\Activate.ps1
 
-# Process a single video
-python -m app.main process input\tutorials\my_video.mp4 --channel tech_channel
+# List all configured channels and video counts
+python -m app.main channels
 
-# Process all videos in a folder
-python -m app.main batch input\tutorials\ --channel tech_channel
+# Process a single video (specify channel for output routing)
+python -m app.main process input\krgd_vlogs\trip_01\beach.mp4 --channel krgd_vlogs
+
+# Fast mode — uses tiny Whisper model + GPU, ~2x faster
+python -m app.main process input\krgd_vlogs\trip_01\beach.mp4 --channel krgd_vlogs --fast
+
+# Batch process all videos in a channel (recursive subfolder discovery)
+python -m app.main batch --channel krgd_vlogs --fast --max-clips 3
+
+# Batch with explicit directory
+python -m app.main batch input\tutorials\ --channel techie_krishna_kayaking
 
 # Check video info first (no processing)
-python -m app.main info input\tutorials\my_video.mp4
+python -m app.main info input\krgd_vlogs\trip_01\beach.mp4
 
-# Watch mode — auto-process new videos dropped into folder
-python -m app.main watch --channel tech_channel --dir input\tutorials
+# Watch mode — auto-process new videos dropped into channel folder
+python -m app.main watch --channel krgd_vlogs --fast
 # Press Ctrl+C to stop
 
 # Upload a generated short (requires YouTube API setup — see below)
-python -m app.main upload output\my_video\my_video_part001.mp4 `
-    --channel tech_channel --title "Quick Python Tip"
+python -m app.main upload output\krgd_vlogs\trip_01_beach_part001.mp4 `
+    --channel krgd_vlogs --title "Epic Beach Adventure"
 
 # Schedule multiple uploads (one per day)
-python -m app.main schedule output\my_video\ --channel tech_channel --interval 24
+python -m app.main schedule output\krgd_vlogs\ --channel krgd_vlogs --interval 24
 
 # Execute all scheduled uploads
 python -m app.main execute-schedule
@@ -524,14 +616,14 @@ python -m app.main execute-schedule
 ### Step 11: Check Your Output
 
 ```powershell
-dir output\my_video\
+dir output\krgd_vlogs\
 
-# You'll see:
-# my_video_part001.mp4   ← Ready-to-upload short
-# my_video_part001.srt   ← Subtitles (SRT)
-# my_video_part001.ass   ← Subtitles (styled ASS)
-# my_video_part001.json  ← Metadata (score, timestamps, transcript)
-# my_video_part002.mp4
+# Flat per-channel output (subfolder names prefixed):
+# trip_01_beach_part001.mp4    ← Ready-to-upload short
+# trip_01_beach_part001.srt    ← Subtitles (SRT)
+# trip_01_beach_part001.ass    ← Subtitles (styled ASS)
+# trip_01_beach_part001.json   ← Metadata (score, timestamps, transcript)
+# trip_01_beach_part002.mp4
 # ...
 ```
 
@@ -550,8 +642,9 @@ pip install --upgrade pip
 pip install -r requirements.txt
 pip install torch torchaudio
 Invoke-WebRequest -Uri "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Bold.ttf" -OutFile "assets\fonts\Montserrat-Bold.ttf"
-Copy-Item "$HOME\Downloads\my_tutorial.mp4" -Destination "input\tutorials\"
-python -m app.main process input\tutorials\my_tutorial.mp4
+Copy-Item "$HOME\Downloads\my_tutorial.mp4" -Destination "input\techie_krishna_kayaking\"
+python -m app.main channels
+python -m app.main process input\techie_krishna_kayaking\my_tutorial.mp4 --channel techie_krishna_kayaking --fast
 ```
 
 ---
@@ -658,11 +751,11 @@ This file is created **automatically** the first time you run an upload command.
 
 ### Multiple Channels
 
-For each channel, you need a separate `client_secret` file:
+For each channel, you need a separate `client_secret` file (referenced in `configs/channels.yaml`):
 ```
-configs/client_secret_tech.json       ← for tech_channel
-configs/client_secret_travel.json     ← for travel_channel
-configs/client_secret_vertical.json   ← for vertical_channel
+configs/client_secret_krgd.json       ← for krgd_vlogs
+configs/client_secret_tkk.json        ← for techie_krishna_kayaking & tkk_live_shorts
+configs/client_secret_kk.json         ← for krishna_kayaking
 ```
 
 Each one can be from the same Google Cloud project (just one OAuth client) or different projects.
@@ -729,50 +822,90 @@ processing:
 
 ### Channel Configuration (`configs/channels.yaml`)
 
+Each channel maps to its own input folder, output folder, socials overlay, and YouTube credentials.
+
 ```yaml
 channels:
-  tech_channel:
-    type: "tutorial"              # tutorial | gopro | vertical
-    name: "My Tech Channel"
-    social_footer: "assets/social/tech.png"
-    intro_text: "Learn Faster"    # Text at top of shorts
-    hook_keywords:                # Keywords that signal good clip start
+  krgd_vlogs:
+    name: "krgd vlogs"
+    type: "gopro"                         # tutorial | gopro | vertical
+    youtube_url: "https://www.youtube.com/@krgd_vlogs"
+    input_folder: "input/krgd_vlogs"      # Videos go here (subfolders OK)
+    output_folder: "output/krgd_vlogs"    # Flat output per channel
+    socials_file: "assets/social/krgd_vlogs_socials.png"  # Branding overlay
+    intro_text: ""                        # Text at top of shorts
+    hook_keywords:                        # Keywords that signal good clip start
+      - "amazing"
+      - "incredible"
+      - "adventure"
+    upload_enabled: false                 # Enable YouTube upload
+    youtube:
+      client_secrets: "configs/client_secret_krgd.json"
+      credentials: "configs/credentials_krgd.json"
+      default_tags: ["vlog", "gopro", "travel", "adventure"]
+      default_category: "19"              # YouTube category ID
+      privacy_status: "private"           # private | unlisted | public
+      schedule_delay_hours: 48            # Hours between scheduled uploads
+
+  techie_krishna_kayaking:
+    name: "techie krishna kayaking"
+    type: "tutorial"
+    youtube_url: "https://www.youtube.com/@TechieKrishnaKayaking"
+    input_folder: "input/techie_krishna_kayaking"
+    output_folder: "output/techie_krishna_kayaking"
+    socials_file: "assets/social/tkk_socials.png"
+    intro_text: "Learn Faster"
+    hook_keywords:
       - "how to"
       - "tip"
       - "mistake"
       - "shortcut"
       - "secret"
-    upload_enabled: false          # Enable YouTube upload
+    upload_enabled: false
     youtube:
-      client_secrets: "configs/client_secret_tech.json"
-      credentials: "configs/credentials_tech.json"
-      default_tags: ["tutorial", "programming"]
-      default_category: "28"       # YouTube category ID
-      privacy_status: "private"    # private | unlisted | public
-      schedule_delay_hours: 24     # Hours between scheduled uploads
+      client_secrets: "configs/client_secret_tkk.json"
+      credentials: "configs/credentials_tkk.json"
+      default_tags: ["tutorial", "tech", "kayaking"]
+      default_category: "28"
+      privacy_status: "private"
+      schedule_delay_hours: 24
 ```
 
 ---
 
 ## Output Structure
 
+Output is **flat per channel**. Videos from nested input subfolders have the subfolder name prefixed.
+
 ```
 output/
-└── tutorial_python/
-    ├── tutorial_python_part001.mp4    ← Short video clip
-    ├── tutorial_python_part001.srt    ← SRT subtitles
-    ├── tutorial_python_part001.ass    ← Styled ASS subtitles
-    ├── tutorial_python_part001.json   ← Metadata & transcript
-    ├── tutorial_python_part002.mp4
-    ├── tutorial_python_part002.srt
-    ├── tutorial_python_part002.ass
-    └── tutorial_python_part002.json
+├── krgd_vlogs/
+│   ├── trip_01_gopro_beach_part001.mp4     ← Short video clip
+│   ├── trip_01_gopro_beach_part001.srt     ← SRT subtitles
+│   ├── trip_01_gopro_beach_part001.ass     ← Styled ASS subtitles
+│   ├── trip_01_gopro_beach_part001.json    ← Metadata & transcript
+│   ├── trip_01_gopro_beach_part002.mp4
+│   └── trip_02_drone_flight_part001.mp4
+├── techie_krishna_kayaking/
+│   ├── python_tips_part001.mp4
+│   └── python_tips_part001.json
+└── krishna_kayaking/
+    └── river_run_part001.mp4
 ```
+
+Naming pattern: `<subfolder>_<videoname>_part<NNN>.mp4`
+
+(If the video is directly in the channel's input folder with no subfolder, the name is just `<videoname>_part<NNN>.mp4`)
 
 ---
 
 ## Features
 
+- **Multi-channel support** with per-channel input/output folders, socials overlays, and YouTube credentials
+- **Fast mode** (`--fast`) — uses tiny Whisper model + GPU acceleration, ~2x faster processing
+- **Recursive subfolder discovery** — organize videos in nested folders (`trip_01/`, `trip_02/`)
+- **Flat output per channel** — subfolder names prefixed to output filenames
+- **`channels` command** — list all configured channels with video counts at a glance
 - **Auto-detection** of video aspect ratio, category, and properties
 - **Smart clip selection** using AI-powered content analysis
 - **Speech transcription** with OpenAI Whisper (word-level timestamps)
@@ -781,7 +914,7 @@ output/
 - **Motion analysis** with OpenCV for action videos
 - **Smart cropping** with face detection (16:9 → 9:16)
 - **Caption generation** (SRT & ASS with word-level karaoke styling)
-- **GPU acceleration** (NVIDIA NVENC)
+- **GPU acceleration** (NVIDIA NVENC / Apple MPS)
 - **YouTube upload** with OAuth2, scheduling, multi-channel support
 - **Folder watcher** for automatic processing
 - **Batch processing** for large video libraries
@@ -801,45 +934,59 @@ output/
 
 ```
 app/
-├── main.py              # CLI entry point (Typer)
+├── main.py              # CLI entry point (Typer) — process, batch, channels, watch, upload, schedule
 ├── detector.py          # Video property detection & categorization
-├── transcriber.py       # Whisper-based speech transcription
+├── transcriber.py       # Whisper-based speech transcription (MPS/CUDA/CPU)
 ├── silence_detector.py  # FFmpeg silence detection
-├── clip_selector.py     # AI clip selection & scoring
+├── clip_selector.py     # AI clip selection & scoring (with --fast mode)
 ├── caption_generator.py # SRT/ASS subtitle generation
-├── renderer.py          # FFmpeg rendering pipeline
+├── renderer.py          # FFmpeg rendering pipeline (runtime filter detection)
 ├── smart_crop.py        # Face-aware smart cropping
 ├── scene_detector.py    # PySceneDetect integration
 ├── motion_detector.py   # OpenCV motion analysis
 ├── uploader.py          # YouTube Data API uploader
 ├── scheduler.py         # Upload scheduling
 └── utils/
-    ├── config.py        # Pydantic config management
+    ├── config.py        # Pydantic config management (channels, app settings)
     ├── logging.py       # Structured logging (structlog + rich)
-    └── files.py         # File/path utilities & ffprobe
+    └── files.py         # File/path utilities, channel video discovery, output naming
+
+configs/
+├── app.yaml             # Processing settings (video, shorts, transcription, captions)
+├── channels.yaml        # Multi-channel configuration (input/output/socials/youtube)
+└── client_secret_*.json # YouTube OAuth credentials (per channel, gitignored)
+
+assets/
+├── fonts/               # Caption fonts (Montserrat-Bold.ttf)
+└── social/              # Per-channel socials overlay images
 ```
 
 ## Processing Pipeline
 
 ```
-Input Video
+Input Video (from channel input folder)
+    │
+    ├── Resolve channel config → socials_file, output_folder, type
     │
     ├── detect_video() → VideoInfo (resolution, fps, category)
     │
     ├── [Tutorial] → transcribe → find hooks → score clips
-    │   └── smart_crop → render 9:16 with captions + overlay
+    │   └── smart_crop → render 9:16 with captions + socials overlay
     │
     ├── [GoPro] → motion_analyze → scene_detect → score excitement
-    │   └── smart_crop → render 9:16 with overlays
+    │   └── smart_crop → render 9:16 with socials overlay
     │
     └── [Vertical] → silence_detect → split at boundaries
         └── trim → render (preserve framing)
     │
     ├── Generate SRT + ASS subtitles
     ├── Export metadata JSON
+    ├── Output to channel folder: output/<channel_id>/<subfolder>_<name>_partNNN.mp4
     │
-    └── [Optional] Schedule YouTube upload
+    └── [Optional] Schedule YouTube upload (per-channel credentials)
 ```
+
+**Fast mode** (`--fast`): Uses Whisper `tiny` model + MPS/CUDA GPU, skips word-level timestamps. ~2x faster.
 
 ---
 
@@ -925,10 +1072,16 @@ source .venv/bin/activate
 ```
 
 ### Processing is slow
-- Use GPU encoding (needs NVIDIA GPU — Windows/Linux only)
+- Use `--fast` flag for ~2x speedup (tiny Whisper model, GPU acceleration, no word timestamps)
+- Use GPU encoding (needs NVIDIA GPU — Windows/Linux only; Apple Silicon uses MPS automatically)
 - Use `transcription.model: "tiny"` (fastest, less accurate)
 - Reduce `processing.max_workers` if running out of RAM
 - For 2+ hour videos, expect 5-15 minutes processing time on CPU
+
+### MPS / Apple Silicon issues
+- Whisper word-level timestamps require CPU (float64 not supported on MPS)
+- Use `--fast` mode to skip word timestamps and get full MPS acceleration
+- If you see `RuntimeError: MPS does not support float64`, this is handled automatically
 
 ### "execution policy" error on Windows
 ```powershell

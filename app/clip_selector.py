@@ -61,12 +61,14 @@ class ClipSelector:
     - Silence boundaries
     """
 
-    def __init__(self):
+    def __init__(self, fast: bool = False):
         config = get_config()
         self.min_duration = config.shorts.min_duration
         self.max_duration = config.shorts.max_duration
         self.target_duration = config.shorts.target_duration
-        self.transcriber = Transcriber()
+        # Fast mode uses 'tiny' model (~6x faster) and skips word timestamps
+        model = "tiny" if fast else None
+        self.transcriber = Transcriber(model_name=model, word_timestamps=not fast)
         self.silence_detector = SilenceDetector()
         self.scene_detector = SceneDetector()
         self.motion_detector = MotionDetector()
@@ -105,8 +107,9 @@ class ClipSelector:
         max_clips: int | None = None,
     ) -> ClipSelection:
         """Select clips from tutorial videos using speech and hook analysis."""
-        # Transcribe the video
-        transcription = self.transcriber.transcribe(video_path)
+        # Transcribe the video (cached for reuse in caption generation)
+        self._last_transcription = self.transcriber.transcribe(video_path)
+        transcription = self._last_transcription
 
         # Detect silence for boundary finding
         silence = self.silence_detector.detect(video_path)

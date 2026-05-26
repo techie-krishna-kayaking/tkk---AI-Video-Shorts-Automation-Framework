@@ -11,9 +11,6 @@ app:
 
 input:
   base_dir: "input"
-  tutorials_dir: "input/tutorials"
-  gopro_dir: "input/gopro"
-  vertical_dir: "input/vertical"
 
 output:
   base_dir: "output"

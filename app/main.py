@@ -28,7 +28,10 @@ from app.scheduler import Scheduler
 from app.uploader import YouTubeUploader
 from app.utils.config import get_config, load_config
 from app.utils.files import (
+    discover_channel_videos,
     ensure_ffmpeg,
+    get_channel_output_dir,
+    get_channel_video_name,
     get_output_dir,
     sanitize_filename,
 )
@@ -57,6 +60,7 @@ def process(
     video_path: Path = typer.Argument(..., help="Path to the input video file."),
     channel: Optional[str] = typer.Option(None, "--channel", "-c", help="Channel name from config."),
     max_clips: Optional[int] = typer.Option(None, "--max-clips", "-n", help="Maximum clips to generate."),
+    fast: bool = typer.Option(False, "--fast", "-f", help="Fast mode: use tiny model, skip word timestamps."),
     no_captions: bool = typer.Option(False, "--no-captions", help="Skip caption generation."),
     no_upload: bool = typer.Option(False, "--no-upload", help="Skip upload even if enabled."),
 ) -> None:
@@ -68,7 +72,21 @@ def process(
         rich_console.print(f"[bold red]Video not found: {video_path}[/bold red]")
         raise typer.Exit(1)
 
+    # Resolve channel config
+    ch_config = config.channels.get(channel) if channel else None
+
+    # Determine output directory and video name prefix
+    if ch_config and ch_config.output_folder:
+        output_dir = get_channel_output_dir(ch_config.output_folder)
+        video_name = get_channel_video_name(video_path, ch_config.input_folder)
+    else:
+        output_dir = get_output_dir(video_path, config.output.base_dir)
+        video_name = sanitize_filename(video_path.stem)
+
     rich_console.print(f"\n[bold cyan]Processing:[/bold cyan] {video_path.name}")
+    if ch_config:
+        rich_console.print(f"  Channel: {ch_config.name}")
+    rich_console.print(f"  Output name: {video_name}")
     rich_console.print("=" * 60)
 
     # Step 1: Detect video properties
@@ -83,7 +101,7 @@ def process(
 
     # Step 2: Select clips
     rich_console.print("\n[bold]Step 2:[/bold] Selecting clips...")
-    selector = ClipSelector()
+    selector = ClipSelector(fast=fast)
     selection = selector.select_clips(video_path, video_info, max_clips=max_clips)
 
     rich_console.print(f"  Candidates analyzed: {selection.total_candidates}")
@@ -95,16 +113,17 @@ def process(
 
     # Step 3: Generate captions
     subtitle_paths: dict[int, Path] = {}
-    output_dir = get_output_dir(video_path, config.output.base_dir)
 
     if not no_captions and config.captions.enabled:
         rich_console.print("\n[bold]Step 3:[/bold] Generating captions...")
         caption_gen = CaptionGenerator()
-        transcriber = selector.transcriber
 
-        transcription = transcriber.transcribe(video_path)
+        # Reuse transcription from clip selection (avoid re-transcribing entire video)
+        transcription = getattr(selector, '_last_transcription', None)
+        if transcription is None:
+            transcription = selector.transcriber.transcribe(video_path)
+
         for idx, clip in enumerate(selection.clips):
-            video_name = sanitize_filename(video_path.stem)
             sub_path = output_dir / f"{video_name}_part{idx + 1:03d}"
             srt_path = caption_gen.generate_srt(
                 transcription, sub_path,
@@ -122,13 +141,13 @@ def process(
     rich_console.print("\n[bold]Step 4:[/bold] Rendering clips...")
     renderer = Renderer()
 
-    # Get overlay path from channel config
+    # Get overlay/socials from channel config
     overlay_path: Path | None = None
     hook_text = ""
-    if channel and channel in config.channels:
-        ch_config = config.channels[channel]
-        if ch_config.social_footer:
-            overlay_path = Path(ch_config.social_footer)
+    if ch_config:
+        socials = ch_config.socials_file or ch_config.social_footer
+        if socials:
+            overlay_path = Path(socials)
         hook_text = ch_config.intro_text
 
     with create_progress() as progress:
@@ -156,7 +175,6 @@ def process(
 
     # Step 5: Upload (if enabled)
     if not no_upload and channel:
-        ch_config = config.channels.get(channel)
         if ch_config and ch_config.upload_enabled:
             rich_console.print("\n[bold]Step 5:[/bold] Scheduling uploads...")
             scheduler = Scheduler()
@@ -164,61 +182,104 @@ def process(
             scheduler.schedule_uploads(
                 video_paths=video_files,
                 channel_name=channel,
-                title_prefix=video_path.stem,
+                title_prefix=video_name,
             )
             rich_console.print(f"  Scheduled {len(video_files)} uploads")
 
 
 @app.command()
 def batch(
-    directory: Path = typer.Argument(..., help="Directory containing videos to process."),
-    channel: Optional[str] = typer.Option(None, "--channel", "-c", help="Channel name."),
+    directory: Path = typer.Argument(None, help="Directory containing videos to process."),
+    channel: Optional[str] = typer.Option(None, "--channel", "-c", help="Channel name (auto-discovers videos from channel input folder)."),
     max_clips: Optional[int] = typer.Option(None, "--max-clips", "-n", help="Max clips per video."),
+    fast: bool = typer.Option(False, "--fast", "-f", help="Fast mode: use tiny model, skip word timestamps."),
     extensions: str = typer.Option("mp4,mov,avi,mkv", "--ext", help="Video extensions to process."),
 ) -> None:
-    """Batch process all videos in a directory."""
-    _init()
+    """
+    Batch process all videos in a directory or channel.
 
-    if not directory.exists():
-        rich_console.print(f"[bold red]Directory not found: {directory}[/bold red]")
-        raise typer.Exit(1)
+    If --channel is specified, recursively discovers all videos in the channel's
+    input folder (supports nested subfolders like trip_01/, trip_02/).
+
+    Output is flat per channel:
+        output/krgd_vlogs/trip_01_video1_part001.mp4
+    """
+    _init()
+    config = get_config()
 
     ext_list = [f".{e.strip()}" for e in extensions.split(",")]
-    videos = [
-        f for f in directory.iterdir()
-        if f.is_file() and f.suffix.lower() in ext_list
-    ]
 
-    if not videos:
-        rich_console.print(f"[yellow]No video files found in {directory}[/yellow]")
-        raise typer.Exit(0)
+    # Determine video list
+    if channel:
+        ch_config = config.channels.get(channel)
+        if not ch_config:
+            rich_console.print(f"[bold red]Channel not found: {channel}[/bold red]")
+            rich_console.print(f"  Available: {', '.join(config.channels.keys())}")
+            raise typer.Exit(1)
 
-    rich_console.print(f"\n[bold cyan]Batch Processing:[/bold cyan] {len(videos)} videos")
-    rich_console.print("=" * 60)
+        videos = discover_channel_videos(ch_config.input_folder, ext_list)
+        if not videos:
+            rich_console.print(f"[yellow]No videos found in {ch_config.input_folder}/[/yellow]")
+            raise typer.Exit(0)
 
-    for idx, video in enumerate(sorted(videos), 1):
+        rich_console.print(f"\n[bold cyan]Channel:[/bold cyan] {ch_config.name}")
+        rich_console.print(f"[bold cyan]Input:[/bold cyan]   {ch_config.input_folder}/")
+        rich_console.print(f"[bold cyan]Output:[/bold cyan]  {ch_config.output_folder}/")
+        rich_console.print(f"[bold cyan]Socials:[/bold cyan] {ch_config.socials_file}")
+        rich_console.print(f"[bold cyan]Videos:[/bold cyan]  {len(videos)} found")
+        rich_console.print("=" * 60)
+
+    elif directory:
+        if not directory.exists():
+            rich_console.print(f"[bold red]Directory not found: {directory}[/bold red]")
+            raise typer.Exit(1)
+
+        videos = sorted(
+            f for f in directory.rglob("*")
+            if f.is_file() and f.suffix.lower() in ext_list
+        )
+        if not videos:
+            rich_console.print(f"[yellow]No video files found in {directory}[/yellow]")
+            raise typer.Exit(0)
+
+        rich_console.print(f"\n[bold cyan]Batch Processing:[/bold cyan] {len(videos)} videos")
+        rich_console.print("=" * 60)
+    else:
+        rich_console.print("[bold red]Specify either a directory or --channel[/bold red]")
+        raise typer.Exit(1)
+
+    success_count = 0
+    fail_count = 0
+
+    for idx, video in enumerate(videos, 1):
         rich_console.print(f"\n[bold]({idx}/{len(videos)})[/bold] {video.name}")
         try:
-            # Invoke process for each video
             process(
                 video_path=video,
                 channel=channel,
                 max_clips=max_clips,
+                fast=fast,
                 no_captions=False,
-                no_upload=False,
+                no_upload=True,  # Don't upload during batch, schedule separately
             )
+            success_count += 1
+        except SystemExit:
+            pass  # typer.Exit from process (e.g. no clips found)
         except Exception as e:
             rich_console.print(f"  [red]Error: {e}[/red]")
             logger.error("batch_video_failed", video=str(video), error=str(e))
+            fail_count += 1
             continue
 
-    rich_console.print(f"\n[bold green]Batch complete! Processed {len(videos)} videos.[/bold green]")
+    rich_console.print(f"\n[bold green]Batch complete![/bold green]")
+    rich_console.print(f"  Processed: {success_count} | Failed: {fail_count}")
 
 
 @app.command()
 def watch(
     channel: Optional[str] = typer.Option(None, "--channel", "-c", help="Channel name."),
     directory: Optional[Path] = typer.Option(None, "--dir", "-d", help="Directory to watch."),
+    fast: bool = typer.Option(False, "--fast", "-f", help="Fast mode."),
 ) -> None:
     """Watch a directory for new videos and process them automatically."""
     _init()
@@ -227,11 +288,22 @@ def watch(
     from watchdog.events import FileSystemEventHandler
     from watchdog.observers import Observer
 
-    watch_dir = directory or Path(config.input.base_dir)
+    # Determine watch directory from channel or explicit path
+    if channel:
+        ch_config = config.channels.get(channel)
+        if ch_config and ch_config.input_folder:
+            watch_dir = Path(ch_config.input_folder)
+        else:
+            watch_dir = Path(config.input.base_dir)
+    else:
+        watch_dir = directory or Path(config.input.base_dir)
+
     if not watch_dir.exists():
         watch_dir.mkdir(parents=True, exist_ok=True)
 
     rich_console.print(f"[bold cyan]Watching:[/bold cyan] {watch_dir}")
+    if channel:
+        rich_console.print(f"[bold cyan]Channel:[/bold cyan] {channel}")
     rich_console.print("Press Ctrl+C to stop.\n")
 
     class VideoHandler(FileSystemEventHandler):
@@ -246,6 +318,7 @@ def watch(
                         video_path=path,
                         channel=channel,
                         max_clips=None,
+                        fast=fast,
                         no_captions=False,
                         no_upload=False,
                     )
@@ -391,6 +464,44 @@ def execute_schedule() -> None:
 
     successful = sum(1 for r in results if r.success)
     rich_console.print(f"\n[bold green]Done![/bold green] {successful}/{len(results)} uploaded successfully.")
+
+
+@app.command(name="channels")
+def list_channels() -> None:
+    """List all configured channels and their video counts."""
+    _init()
+    config = get_config()
+
+    if not config.channels:
+        rich_console.print("[yellow]No channels configured.[/yellow]")
+        raise typer.Exit(0)
+
+    table = Table(title="Configured Channels")
+    table.add_column("#", style="dim")
+    table.add_column("Channel ID", style="cyan")
+    table.add_column("Name", style="bold")
+    table.add_column("Type", style="yellow")
+    table.add_column("Input Folder", style="green")
+    table.add_column("Videos", style="magenta", justify="right")
+    table.add_column("Socials", style="dim")
+
+    for idx, (ch_id, ch) in enumerate(config.channels.items(), 1):
+        videos = discover_channel_videos(ch.input_folder) if ch.input_folder else []
+        socials_status = "✓" if ch.socials_file and Path(ch.socials_file).exists() else "✗"
+        table.add_row(
+            str(idx),
+            ch_id,
+            ch.name,
+            ch.type,
+            ch.input_folder,
+            str(len(videos)),
+            socials_status,
+        )
+
+    rich_console.print(table)
+    rich_console.print(
+        "\n[dim]Usage: python -m app.main batch --channel <channel_id> --fast --max-clips 5[/dim]"
+    )
 
 
 if __name__ == "__main__":

@@ -45,9 +45,10 @@ class Transcription:
 class Transcriber:
     """Whisper-based audio transcription engine."""
 
-    def __init__(self, model_name: str | None = None, device: str | None = None):
+    def __init__(self, model_name: str | None = None, device: str | None = None, word_timestamps: bool | None = None):
         config = get_config()
         self.model_name = model_name or config.transcription.model
+        self._word_timestamps = word_timestamps if word_timestamps is not None else config.transcription.word_timestamps
         self.device = device or self._detect_device(config.transcription.device)
         self._model: whisper.Whisper | None = None
         logger.info(
@@ -57,13 +58,21 @@ class Transcriber:
         )
 
     def _detect_device(self, device_setting: str) -> str:
-        """Detect the best available device."""
+        """Detect the best available device.
+        
+        Note: MPS (Apple Silicon) doesn't support float64, which Whisper's
+        word-level timestamp alignment requires. Force CPU when word timestamps enabled.
+        """
         if device_setting != "auto":
+            if device_setting == "mps" and self._word_timestamps:
+                return "cpu"
             return device_setting
         if torch.cuda.is_available():
             return "cuda"
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            return "mps"
+            # MPS works fine without word timestamps; float64 issue only in dtw alignment
+            if not self._word_timestamps:
+                return "mps"
         return "cpu"
 
     @property
@@ -94,7 +103,7 @@ class Transcriber:
         result = self.model.transcribe(
             str(audio_path),
             language=lang,
-            word_timestamps=config.transcription.word_timestamps,
+            word_timestamps=self._word_timestamps,
             verbose=False,
         )
 

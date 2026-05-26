@@ -1,12 +1,44 @@
 # ====================================================
 # Channel Configuration
 # ====================================================
+# Each channel maps to an input folder, output folder,
+# and a socials overlay image for branding.
+# ====================================================
 
 channels:
-  tech_channel:
+  krgd_vlogs:
+    name: "krgd vlogs"
+    type: "gopro"
+    youtube_url: "https://www.youtube.com/@krgd_vlogs"
+    input_folder: "input/krgd_vlogs"
+    output_folder: "output/krgd_vlogs"
+    socials_file: "assets/social/krgd_vlogs_socials.png"
+    intro_text: ""
+    hook_keywords:
+      - "amazing"
+      - "incredible"
+      - "look at this"
+      - "adventure"
+    upload_enabled: false
+    youtube:
+      client_secrets: "configs/client_secret_krgd.json"
+      credentials: "configs/credentials_krgd.json"
+      default_tags:
+        - "vlog"
+        - "gopro"
+        - "travel"
+        - "adventure"
+      default_category: "19"
+      privacy_status: "private"
+      schedule_delay_hours: 48
+
+  techie_krishna_kayaking:
+    name: "techie krishna kayaking"
     type: "tutorial"
-    name: "Tech Tutorials"
-    social_footer: "assets/social/tech.png"
+    youtube_url: "https://www.youtube.com/@TechieKrishnaKayaking"
+    input_folder: "input/techie_krishna_kayaking"
+    output_folder: "output/techie_krishna_kayaking"
+    socials_file: "assets/social/tkk_socials.png"
     intro_text: "Learn Faster"
     hook_keywords:
       - "how to"
@@ -16,50 +48,66 @@ channels:
       - "secret"
       - "why"
       - "important"
-    upload_enabled: true
+      - "trick"
+      - "hack"
+    upload_enabled: false
     youtube:
-      client_secrets: "configs/client_secret_tech.json"
-      credentials: "configs/credentials_tech.json"
+      client_secrets: "configs/client_secret_tkk.json"
+      credentials: "configs/credentials_tkk.json"
       default_tags:
         - "tutorial"
-        - "programming"
         - "tech"
+        - "kayaking"
       default_category: "28"
       privacy_status: "private"
       schedule_delay_hours: 24
 
-  travel_channel:
+  krishna_kayaking:
+    name: "Krishna kayaking"
     type: "gopro"
-    name: "Adventure Vlogs"
-    social_footer: "assets/social/travel.png"
-    intro_text: "Adventure Begins"
-    hook_keywords:
-      - "amazing"
-      - "incredible"
-      - "look at this"
-    upload_enabled: false
-    youtube:
-      client_secrets: "configs/client_secret_travel.json"
-      credentials: "configs/credentials_travel.json"
-      default_tags:
-        - "travel"
-        - "adventure"
-        - "gopro"
-      default_category: "19"
-      privacy_status: "private"
-      schedule_delay_hours: 48
-
-  vertical_channel:
-    type: "vertical"
-    name: "Vertical Shorts"
-    social_footer: "assets/social/vertical.png"
+    youtube_url: "https://www.youtube.com/@krishnakayaking"
+    input_folder: "input/krishna_kayaking"
+    output_folder: "output/krishna_kayaking"
+    socials_file: "assets/social/kk_socials.png"
     intro_text: ""
+    hook_keywords:
+      - "kayaking"
+      - "river"
+      - "rapids"
+      - "adventure"
     upload_enabled: false
     youtube:
-      client_secrets: "configs/client_secret_vertical.json"
-      credentials: "configs/credentials_vertical.json"
+      client_secrets: "configs/client_secret_kk.json"
+      credentials: "configs/credentials_kk.json"
+      default_tags:
+        - "kayaking"
+        - "adventure"
+        - "river"
+      default_category: "17"
+      privacy_status: "private"
+      schedule_delay_hours: 24
+
+  tkk_live_shorts:
+    name: "TKK Live & Shorts"
+    type: "tutorial"
+    youtube_url: "https://www.youtube.com/@TKKLiveShorts"
+    input_folder: "input/tkk_live_shorts"
+    output_folder: "output/tkk_live_shorts"
+    socials_file: "assets/social/tkk_socials.png"
+    intro_text: ""
+    hook_keywords:
+      - "how to"
+      - "quick tip"
+      - "in 60 seconds"
+      - "shorts"
+    upload_enabled: false
+    youtube:
+      client_secrets: "configs/client_secret_tkk.json"
+      credentials: "configs/credentials_tkk.json"
       default_tags:
         - "shorts"
-      default_category: "22"
+        - "tutorial"
+        - "quick"
+      default_category: "28"
       privacy_status: "private"
       schedule_delay_hours: 12

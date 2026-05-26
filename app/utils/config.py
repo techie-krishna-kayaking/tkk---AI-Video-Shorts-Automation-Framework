@@ -79,9 +79,6 @@ class OutputConfig(BaseModel):
 
 class InputConfig(BaseModel):
     base_dir: str = "input"
-    tutorials_dir: str = "input/tutorials"
-    gopro_dir: str = "input/gopro"
-    vertical_dir: str = "input/vertical"
 
 
 class AssetsConfig(BaseModel):
@@ -102,7 +99,11 @@ class YouTubeChannelConfig(BaseModel):
 class ChannelConfig(BaseModel):
     type: str = "tutorial"
     name: str = ""
-    social_footer: str = ""
+    youtube_url: str = ""
+    input_folder: str = ""
+    output_folder: str = ""
+    socials_file: str = ""
+    social_footer: str = ""  # legacy compat
     intro_text: str = ""
     hook_keywords: list[str] = Field(default_factory=list)
     upload_enabled: bool = False

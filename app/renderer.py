@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
-from dataclasses import dataclass
+import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.clip_selector import Clip
@@ -67,6 +69,7 @@ class Renderer:
         self.gpu_encoder = config.rendering.gpu_encoder
         self.cpu_encoder = config.rendering.cpu_encoder
         self.smart_crop = SmartCrop()
+        self._temp_links: list[Path] = []
 
         if self.gpu_available:
             logger.info("gpu_rendering_enabled", encoder=self.gpu_encoder)
@@ -76,6 +79,28 @@ class Renderer:
     @property
     def encoder(self) -> str:
         return self.gpu_encoder if self.gpu_available else self.cpu_encoder
+
+    @property
+    def _has_subtitle_filter(self) -> bool:
+        """Check if FFmpeg has subtitle filter support (requires libass)."""
+        if not hasattr(self, "_subtitle_supported"):
+            result = subprocess.run(
+                ["ffmpeg", "-filters"],
+                capture_output=True, text=True,
+            )
+            self._subtitle_supported = "subtitles" in result.stdout
+        return self._subtitle_supported
+
+    @property
+    def _has_drawtext_filter(self) -> bool:
+        """Check if FFmpeg has drawtext filter support (requires libfreetype)."""
+        if not hasattr(self, "_drawtext_supported"):
+            result = subprocess.run(
+                ["ffmpeg", "-filters"],
+                capture_output=True, text=True,
+            )
+            self._drawtext_supported = "drawtext" in result.stdout
+        return self._drawtext_supported
 
     def render_clip(self, job: RenderJob) -> RenderResult:
         """
@@ -152,6 +177,11 @@ class Renderer:
                 file_size=0,
                 error=str(e),
             )
+        finally:
+            # Cleanup temp symlinks
+            for link in self._temp_links:
+                link.unlink(missing_ok=True)
+            self._temp_links.clear()
 
     def _build_ffmpeg_command(self, job: RenderJob) -> list[str]:
         """Build the complete FFmpeg command for a render job."""
@@ -262,8 +292,8 @@ class Renderer:
             filters.append(pad_filter)
             current_stream = "[padded]"
 
-        # Add hook text overlay at top
-        if job.hook_text:
+        # Add hook text overlay at top (requires libfreetype)
+        if job.hook_text and self._has_drawtext_filter:
             escaped_text = job.hook_text.replace("'", "\\'").replace(":", "\\:")
             text_filter = (
                 f"{current_stream}drawtext=text='{escaped_text}'"
@@ -273,13 +303,20 @@ class Renderer:
             filters.append(text_filter)
             current_stream = "[texted]"
 
-        # Burn subtitles
-        if job.subtitle_path and job.subtitle_path.exists():
-            sub_path_escaped = str(job.subtitle_path).replace(":", "\\:").replace("\\", "/")
+        # Burn subtitles (requires FFmpeg built with --enable-libass)
+        if job.subtitle_path and job.subtitle_path.exists() and self._has_subtitle_filter:
+            tmp_dir = Path(tempfile.gettempdir()) / "shorts_render"
+            tmp_dir.mkdir(exist_ok=True)
+            tmp_sub = tmp_dir / f"sub{os.getpid()}{job.subtitle_path.suffix}"
+            tmp_sub.unlink(missing_ok=True)
+            tmp_sub.symlink_to(job.subtitle_path.resolve())
+            self._temp_links.append(tmp_sub)
+            
+            sub_path_str = str(tmp_sub)
             if job.subtitle_path.suffix == ".ass":
-                sub_filter = f"{current_stream}ass='{sub_path_escaped}'[subbed]"
+                sub_filter = f"{current_stream}ass={sub_path_str},null[subbed]"
             else:
-                sub_filter = f"{current_stream}subtitles='{sub_path_escaped}'[subbed]"
+                sub_filter = f"{current_stream}subtitles={sub_path_str},null[subbed]"
             filters.append(sub_filter)
             current_stream = "[subbed]"
 
@@ -297,16 +334,18 @@ class Renderer:
 
         # Final output label
         if filters:
-            # Rename last stream to [vout]
+            # Replace the last output label with [vout]
             last_filter = filters[-1]
-            # Replace the last label with [vout]
-            last_label = current_stream
-            filters[-1] = last_filter.rsplit(last_label.strip("[]"), 1)[0] + "vout]"
-            # Fix: ensure proper label replacement
-            filters[-1] = last_filter.replace(
-                last_label.strip("[]") + "]",
-                "vout]"
-            )
+            last_label = current_stream  # e.g. "[subbed]" or "[padded]"
+            # Replace only the trailing label
+            if last_filter.endswith(last_label):
+                filters[-1] = last_filter[: -len(last_label)] + "[vout]"
+            else:
+                # Fallback: replace last occurrence of the label text
+                label_text = last_label.strip("[]")
+                idx = last_filter.rfind(f"[{label_text}]")
+                if idx != -1:
+                    filters[-1] = last_filter[:idx] + "[vout]" + last_filter[idx + len(last_label):]
 
         return ";".join(filters) if filters else ""
 

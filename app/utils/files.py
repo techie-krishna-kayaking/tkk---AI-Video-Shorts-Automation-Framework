@@ -34,6 +34,68 @@ def get_output_dir(video_path: Path, output_base: str = "output") -> Path:
     return output_dir
 
 
+def get_channel_output_dir(channel_output_folder: str) -> Path:
+    """Get or create the flat output directory for a channel."""
+    output_dir = Path(channel_output_folder)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
+
+
+def get_channel_video_name(video_path: Path, channel_input_folder: str) -> str:
+    """
+    Generate output video name using parent folder + original video name.
+
+    For a video at input/krgd_vlogs/trip_01/video1.mp4 with channel input
+    folder 'input/krgd_vlogs', returns 'trip_01_video1'.
+
+    If the video is directly in the channel folder (no subfolder),
+    just returns the video stem.
+    """
+    channel_root = Path(channel_input_folder).resolve()
+    video_resolved = video_path.resolve()
+
+    try:
+        relative = video_resolved.relative_to(channel_root)
+    except ValueError:
+        # Video isn't inside the channel folder, use plain name
+        return sanitize_filename(video_path.stem)
+
+    parts = relative.parts
+    if len(parts) <= 1:
+        # Video is directly in channel folder
+        return sanitize_filename(video_path.stem)
+    else:
+        # Use parent folder(s) + video name: trip_01_video1
+        parent_parts = parts[:-1]
+        prefix = "_".join(sanitize_filename(p) for p in parent_parts)
+        return f"{prefix}_{sanitize_filename(video_path.stem)}"
+
+
+def discover_channel_videos(
+    channel_input_folder: str,
+    extensions: list[str] | None = None,
+) -> list[Path]:
+    """
+    Recursively discover all videos inside a channel's input folder.
+
+    Supports nested folders like:
+        input/krgd_vlogs/trip_01/video1.mp4
+        input/krgd_vlogs/trip_02/video2.mp4
+    """
+    if extensions is None:
+        extensions = [".mp4", ".mov", ".avi", ".mkv"]
+
+    input_dir = Path(channel_input_folder)
+    if not input_dir.exists():
+        return []
+
+    videos = sorted(
+        f for f in input_dir.rglob("*")
+        if f.is_file() and f.suffix.lower() in extensions
+    )
+    return videos
+
+
 def get_clip_filename(
     video_name: str,
     part_number: int,
