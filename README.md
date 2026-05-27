@@ -164,6 +164,15 @@ assets/social/                   ← Per-channel socials overlays
   `input/krgd_vlogs/trip_01/beach.mp4` → `output/krgd_vlogs/trip_01_beach_part001.mp4`
 - Each channel has its own socials overlay PNG (branding image burned into shorts)
 - YouTube credentials are per-channel for multi-account upload support
+- **Upload uses the output filename as the YouTube video title** automatically
+
+### Rendering Modes by Channel Type
+
+| Channel Type | Rendering | Description |
+|---|---|---|
+| `tutorial` | Smart crop 16:9 → 9:16 | Face-aware cropping, fills the entire vertical frame |
+| `gopro` | White letterbox | Video centered on white 9:16 canvas (no camera area lost), "Watch the full video on YT" text at top, socials at bottom |
+| `vertical` | Trim only | Already 9:16, just split at boundaries |
 
 ### CLI Quick Reference
 
@@ -171,11 +180,14 @@ assets/social/                   ← Per-channel socials overlays
 # List all configured channels
 python -m app.main channels
 
+# Process ALL channels at once (easiest way)
+python -m app.main batch-all --fast --max-clips 3
+
+# Process a single channel
+python -m app.main batch --channel krgd_vlogs --fast --max-clips 3
+
 # Process a single video for a channel
 python -m app.main process input/krgd_vlogs/trip_01/beach.mp4 --channel krgd_vlogs
-
-# Batch process all videos in a channel (recursive)
-python -m app.main batch --channel krgd_vlogs --fast --max-clips 3
 
 # Batch with explicit directory
 python -m app.main batch input/tutorials/ --channel techie_krishna_kayaking
@@ -330,17 +342,14 @@ source .venv/bin/activate
 # List all configured channels and video counts
 python -m app.main channels
 
-# Process a single video (specify channel for output routing)
-python -m app.main process input/krgd_vlogs/trip_01/beach.mp4 --channel krgd_vlogs
+# ⚡ Process ALL channels at once (easiest — just put videos in folders and run)
+python -m app.main batch-all --fast --max-clips 3
 
-# Fast mode — uses tiny Whisper model + MPS GPU, ~2x faster
-python -m app.main process input/krgd_vlogs/trip_01/beach.mp4 --channel krgd_vlogs --fast
-
-# Batch process all videos in a channel (recursive subfolder discovery)
+# Process a single channel only
 python -m app.main batch --channel krgd_vlogs --fast --max-clips 3
 
-# Batch with explicit directory
-python -m app.main batch input/tutorials/ --channel techie_krishna_kayaking
+# Process a single video (specify channel for output routing)
+python -m app.main process input/krgd_vlogs/trip_01/beach.mp4 --channel krgd_vlogs --fast
 
 # Check video info first (no processing)
 python -m app.main info input/krgd_vlogs/trip_01/beach.mp4
@@ -385,9 +394,9 @@ brew install python@3.11 ffmpeg
 cd tkk-try && python3 -m venv .venv && source .venv/bin/activate
 pip install --upgrade pip && pip install -r requirements.txt && pip install torch torchaudio
 curl -L "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Bold.ttf" -o assets/fonts/Montserrat-Bold.ttf
-cp ~/Downloads/my_tutorial.mp4 input/techie_krishna_kayaking/
+cp ~/Downloads/my_gopro.mp4 input/krgd_vlogs/trip_01/
 python -m app.main channels
-python -m app.main process input/techie_krishna_kayaking/my_tutorial.mp4 --channel techie_krishna_kayaking --fast
+python -m app.main batch-all --fast --max-clips 3
 ```
 
 ---
@@ -581,17 +590,14 @@ Nested folders like `trip_01\` are supported — the subfolder name is prefixed 
 # List all configured channels and video counts
 python -m app.main channels
 
-# Process a single video (specify channel for output routing)
-python -m app.main process input\krgd_vlogs\trip_01\beach.mp4 --channel krgd_vlogs
+# ⚡ Process ALL channels at once (easiest — just put videos in folders and run)
+python -m app.main batch-all --fast --max-clips 3
 
-# Fast mode — uses tiny Whisper model + GPU, ~2x faster
-python -m app.main process input\krgd_vlogs\trip_01\beach.mp4 --channel krgd_vlogs --fast
-
-# Batch process all videos in a channel (recursive subfolder discovery)
+# Process a single channel only
 python -m app.main batch --channel krgd_vlogs --fast --max-clips 3
 
-# Batch with explicit directory
-python -m app.main batch input\tutorials\ --channel techie_krishna_kayaking
+# Process a single video
+python -m app.main process input\krgd_vlogs\trip_01\beach.mp4 --channel krgd_vlogs --fast
 
 # Check video info first (no processing)
 python -m app.main info input\krgd_vlogs\trip_01\beach.mp4
@@ -642,9 +648,9 @@ pip install --upgrade pip
 pip install -r requirements.txt
 pip install torch torchaudio
 Invoke-WebRequest -Uri "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Bold.ttf" -OutFile "assets\fonts\Montserrat-Bold.ttf"
-Copy-Item "$HOME\Downloads\my_tutorial.mp4" -Destination "input\techie_krishna_kayaking\"
+Copy-Item "$HOME\Downloads\my_gopro.mp4" -Destination "input\krgd_vlogs\trip_01\"
 python -m app.main channels
-python -m app.main process input\techie_krishna_kayaking\my_tutorial.mp4 --channel techie_krishna_kayaking --fast
+python -m app.main batch-all --fast --max-clips 3
 ```
 
 ---
@@ -902,7 +908,11 @@ Naming pattern: `<subfolder>_<videoname>_part<NNN>.mp4`
 ## Features
 
 - **Multi-channel support** with per-channel input/output folders, socials overlays, and YouTube credentials
+- **`batch-all` command** — process every video across all channels with one command
+- **Gopro letterbox mode** — white 9:16 canvas with video centered (no camera area lost), "Watch the full video on YT" text at top, socials at bottom
+- **Smart crop mode** — face-aware 16:9 → 9:16 cropping for tutorial channels
 - **Fast mode** (`--fast`) — uses tiny Whisper model + GPU acceleration, ~2x faster processing
+- **Filename as YouTube title** — upload/schedule automatically uses the output filename as the video title
 - **Recursive subfolder discovery** — organize videos in nested folders (`trip_01/`, `trip_02/`)
 - **Flat output per channel** — subfolder names prefixed to output filenames
 - **`channels` command** — list all configured channels with video counts at a glance
@@ -912,7 +922,6 @@ Naming pattern: `<subfolder>_<videoname>_part<NNN>.mp4`
 - **Silence detection** for intelligent clip boundaries
 - **Scene detection** using PySceneDetect
 - **Motion analysis** with OpenCV for action videos
-- **Smart cropping** with face detection (16:9 → 9:16)
 - **Caption generation** (SRT & ASS with word-level karaoke styling)
 - **GPU acceleration** (NVIDIA NVENC / Apple MPS)
 - **YouTube upload** with OAuth2, scheduling, multi-channel support
@@ -922,11 +931,11 @@ Naming pattern: `<subfolder>_<videoname>_part<NNN>.mp4`
 
 ## Supported Input
 
-| Type | Aspect Ratio | Processing |
-|------|-------------|------------|
-| OBS Tutorials | 16:9 | Smart crop → 9:16, hook detection, caption burn |
-| GoPro/Action | 16:9 | Motion analysis, excitement scoring, scene transitions |
-| Vertical | 9:16 | Trim at silence/sentence boundaries |
+| Type | Aspect Ratio | Rendering | Description |
+|------|-------------|-----------|-------------|
+| OBS Tutorials | 16:9 | Smart crop → 9:16 | Face-aware cropping, hook detection, caption burn |
+| GoPro/Action | 16:9 | White letterbox | Video centered on white canvas, no cropping, "Watch full video on YT" + socials |
+| Vertical | 9:16 | Trim only | Split at silence/sentence boundaries |
 
 ---
 
@@ -934,7 +943,7 @@ Naming pattern: `<subfolder>_<videoname>_part<NNN>.mp4`
 
 ```
 app/
-├── main.py              # CLI entry point (Typer) — process, batch, channels, watch, upload, schedule
+├── main.py              # CLI entry point (Typer) — process, batch, batch-all, channels, watch, upload, schedule
 ├── detector.py          # Video property detection & categorization
 ├── transcriber.py       # Whisper-based speech transcription (MPS/CUDA/CPU)
 ├── silence_detector.py  # FFmpeg silence detection

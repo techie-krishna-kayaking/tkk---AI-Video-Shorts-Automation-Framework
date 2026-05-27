@@ -144,11 +144,13 @@ def process(
     # Get overlay/socials from channel config
     overlay_path: Path | None = None
     hook_text = ""
+    channel_type = "tutorial"
     if ch_config:
         socials = ch_config.socials_file or ch_config.social_footer
         if socials:
             overlay_path = Path(socials)
         hook_text = ch_config.intro_text
+        channel_type = ch_config.type
 
     with create_progress() as progress:
         task = progress.add_task("Rendering clips...", total=len(selection.clips))
@@ -162,6 +164,7 @@ def process(
                 subtitle_paths={0: subtitle_paths[idx]} if idx in subtitle_paths else None,
                 overlay_path=overlay_path,
                 hook_text=hook_text,
+                channel_type=channel_type,
             )
             results.extend(result)
             progress.advance(task)
@@ -273,6 +276,69 @@ def batch(
 
     rich_console.print(f"\n[bold green]Batch complete![/bold green]")
     rich_console.print(f"  Processed: {success_count} | Failed: {fail_count}")
+
+
+@app.command(name="batch-all")
+def batch_all(
+    max_clips: Optional[int] = typer.Option(None, "--max-clips", "-n", help="Max clips per video."),
+    fast: bool = typer.Option(False, "--fast", "-f", help="Fast mode: use tiny model, skip word timestamps."),
+    extensions: str = typer.Option("mp4,mov,avi,mkv", "--ext", help="Video extensions to process."),
+) -> None:
+    """
+    Batch process ALL channels — discovers and processes every video across all configured channels.
+
+    Equivalent to running `batch --channel <name>` for each channel in channels.yaml.
+    """
+    _init()
+    config = get_config()
+
+    if not config.channels:
+        rich_console.print("[yellow]No channels configured in channels.yaml[/yellow]")
+        raise typer.Exit(0)
+
+    rich_console.print(f"\n[bold cyan]Batch All — Processing {len(config.channels)} channels[/bold cyan]")
+    rich_console.print("=" * 60)
+
+    total_success = 0
+    total_fail = 0
+
+    for ch_id, ch_config in config.channels.items():
+        ext_list = [f".{e.strip()}" for e in extensions.split(",")]
+        videos = discover_channel_videos(ch_config.input_folder, ext_list) if ch_config.input_folder else []
+
+        if not videos:
+            rich_console.print(f"\n[dim]Channel: {ch_id} — no videos, skipping[/dim]")
+            continue
+
+        rich_console.print(f"\n[bold magenta]{'─' * 60}[/bold magenta]")
+        rich_console.print(f"[bold magenta]Channel: {ch_config.name} ({ch_id})[/bold magenta]")
+        rich_console.print(f"  Input:  {ch_config.input_folder}/")
+        rich_console.print(f"  Videos: {len(videos)}")
+        rich_console.print(f"[bold magenta]{'─' * 60}[/bold magenta]")
+
+        for idx, video in enumerate(videos, 1):
+            rich_console.print(f"\n  [bold]({idx}/{len(videos)})[/bold] {video.name}")
+            try:
+                process(
+                    video_path=video,
+                    channel=ch_id,
+                    max_clips=max_clips,
+                    fast=fast,
+                    no_captions=False,
+                    no_upload=True,
+                )
+                total_success += 1
+            except SystemExit:
+                pass
+            except Exception as e:
+                rich_console.print(f"    [red]Error: {e}[/red]")
+                logger.error("batch_all_failed", channel=ch_id, video=str(video), error=str(e))
+                total_fail += 1
+                continue
+
+    rich_console.print(f"\n[bold green]{'=' * 60}[/bold green]")
+    rich_console.print(f"[bold green]All channels done![/bold green]")
+    rich_console.print(f"  Processed: {total_success} | Failed: {total_fail}")
 
 
 @app.command()

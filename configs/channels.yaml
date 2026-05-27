@@ -12,7 +12,7 @@ channels:
     youtube_url: "https://www.youtube.com/@krgd_vlogs"
     input_folder: "input/krgd_vlogs"
     output_folder: "output/krgd_vlogs"
-    socials_file: "assets/social/krgd_vlogs_socials.png"
+    socials_file: "assets/social/krgd_vlogs.png"
     intro_text: ""
     hook_keywords:
       - "amazing"
