@@ -23,6 +23,7 @@ from rich.table import Table
 from app.caption_generator import CaptionGenerator
 from app.clip_selector import ClipSelector
 from app.detector import VideoCategory, detect_video
+from app.longform import LongformResult, discover_subfolders, generate_longform, sort_gopro_chronological
 from app.renderer import Renderer
 from app.scheduler import Scheduler
 from app.uploader import YouTubeUploader
@@ -33,6 +34,7 @@ from app.utils.files import (
     get_channel_output_dir,
     get_channel_video_name,
     get_output_dir,
+    get_video_duration,
     sanitize_filename,
 )
 from app.utils.logging import console as rich_console, create_progress, get_logger, setup_logging
@@ -275,7 +277,17 @@ def batch(
             continue
 
     rich_console.print(f"\n[bold green]Batch complete![/bold green]")
-    rich_console.print(f"  Processed: {success_count} | Failed: {fail_count}")
+    rich_console.print(f"  Shorts — Processed: {success_count} | Failed: {fail_count}")
+
+    # Auto-generate long-form videos for gopro channels
+    if channel and ch_config and ch_config.type == "gopro":
+        rich_console.print(f"\n[bold cyan]Generating long-form videos for {channel}...[/bold cyan]")
+        try:
+            longform(channel=channel, subfolder=None, no_overlay=False)
+        except SystemExit:
+            pass
+        except Exception as e:
+            rich_console.print(f"  [red]Long-form error: {e}[/red]")
 
 
 @app.command(name="batch-all")
@@ -338,7 +350,23 @@ def batch_all(
 
     rich_console.print(f"\n[bold green]{'=' * 60}[/bold green]")
     rich_console.print(f"[bold green]All channels done![/bold green]")
-    rich_console.print(f"  Processed: {total_success} | Failed: {total_fail}")
+    rich_console.print(f"  Shorts — Processed: {total_success} | Failed: {total_fail}")
+
+    # Auto-generate long-form videos for gopro channels
+    longform_channels = [
+        (ch_id, ch) for ch_id, ch in config.channels.items()
+        if ch.type == "gopro" and ch.input_folder
+    ]
+    if longform_channels:
+        rich_console.print(f"\n[bold cyan]{'─' * 60}[/bold cyan]")
+        rich_console.print(f"[bold cyan]Generating long-form videos for {len(longform_channels)} gopro channel(s)...[/bold cyan]")
+        for ch_id, _ in longform_channels:
+            try:
+                longform(channel=ch_id, subfolder=None, no_overlay=False)
+            except SystemExit:
+                pass
+            except Exception as e:
+                rich_console.print(f"  [red]Long-form error ({ch_id}): {e}[/red]")
 
 
 @app.command()
@@ -568,6 +596,216 @@ def list_channels() -> None:
     rich_console.print(
         "\n[dim]Usage: python -m app.main batch --channel <channel_id> --fast --max-clips 5[/dim]"
     )
+
+
+@app.command()
+def longform(
+    channel: str = typer.Option("krgd_vlogs", "--channel", "-c", help="Channel name (must be gopro type)."),
+    subfolder: Optional[str] = typer.Option(None, "--subfolder", "-s", help="Process only a specific subfolder."),
+    no_overlay: bool = typer.Option(False, "--no-overlay", help="Skip social watermark overlay."),
+) -> None:
+    """
+    Generate long-form vlog videos by merging all clips in each subfolder.
+
+    For each subfolder in the channel's input directory, all videos are merged
+    into one continuous 16:9 landscape video in chronological order with a
+    social branding watermark in the top-left corner.
+    """
+    _init()
+    config = get_config()
+    import time as _time
+
+    ch_config = config.channels.get(channel)
+    if not ch_config:
+        rich_console.print(f"[bold red]Channel not found: {channel}[/bold red]")
+        rich_console.print(f"  Available: {', '.join(config.channels.keys())}")
+        raise typer.Exit(1)
+
+    if not ch_config.input_folder:
+        rich_console.print(f"[bold red]Channel {channel} has no input_folder configured[/bold red]")
+        raise typer.Exit(1)
+
+    # Discover subfolders
+    subfolders = discover_subfolders(ch_config.input_folder)
+    if subfolder:
+        if subfolder not in subfolders:
+            rich_console.print(f"[bold red]Subfolder not found: {subfolder}[/bold red]")
+            rich_console.print(f"  Available: {', '.join(subfolders.keys())}")
+            raise typer.Exit(1)
+        subfolders = {subfolder: subfolders[subfolder]}
+
+    if not subfolders:
+        rich_console.print(f"[yellow]No subfolders with videos found in {ch_config.input_folder}/[/yellow]")
+        raise typer.Exit(0)
+
+    # Overlay setup
+    overlay_path: Path | None = None
+    if not no_overlay and ch_config.socials_file:
+        overlay_path = Path(ch_config.socials_file)
+        if not overlay_path.exists():
+            rich_console.print(f"[yellow]Warning: Socials file not found: {overlay_path}[/yellow]")
+            overlay_path = None
+
+    # Output directory
+    output_base = Path(ch_config.output_folder) / "longform"
+    output_base.mkdir(parents=True, exist_ok=True)
+
+    rich_console.print(f"\n[bold cyan]Long-form Video Generation[/bold cyan]")
+    rich_console.print(f"  Channel:    {ch_config.name} ({channel})")
+    rich_console.print(f"  Input:      {ch_config.input_folder}/")
+    rich_console.print(f"  Output:     {output_base}/")
+    rich_console.print(f"  Subfolders: {len(subfolders)}")
+    rich_console.print(f"  Overlay:    {'Yes' if overlay_path else 'No'}")
+    rich_console.print("=" * 60)
+
+    # Process each subfolder
+    total_start = _time.time()
+    results: list[tuple[str, LongformResult]] = []
+    total_input_videos = 0
+    total_skipped: list[str] = []
+    duplicates: list[str] = []
+    shorts_created = 0
+
+    for folder_name, videos in subfolders.items():
+        rich_console.print(f"\n[bold magenta]Subfolder: {folder_name}[/bold magenta]")
+        rich_console.print(f"  Videos: {len(videos)}")
+
+        # Check for duplicates (same file size + name pattern)
+        seen_sizes: dict[int, str] = {}
+        for v in videos:
+            sz = v.stat().st_size
+            if sz in seen_sizes and sz > 1024 * 1024:  # >1MB with same size
+                duplicates.append(f"{v.name} ≈ {seen_sizes[sz]}")
+            seen_sizes[sz] = v.name
+
+        total_input_videos += len(videos)
+        output_file = output_base / f"{folder_name}_full.mp4"
+
+        rich_console.print(f"  Output: {output_file.name}")
+        rich_console.print(f"  Sorting chronologically...")
+
+        sorted_vids = sort_gopro_chronological(videos)
+        for idx, v in enumerate(sorted_vids, 1):
+            rich_console.print(f"    {idx:2d}. {v.name}")
+
+        rich_console.print(f"  Rendering long-form video...")
+        result = generate_longform(
+            videos=videos,
+            output_path=output_file,
+            overlay_path=overlay_path,
+        )
+        results.append((folder_name, result))
+
+        if result.success:
+            rich_console.print(
+                f"  [green]✓ Done![/green] "
+                f"{result.output_duration / 60:.1f} min, "
+                f"{result.file_size / 1024 / 1024:.0f} MB, "
+                f"took {result.processing_time:.0f}s"
+            )
+        else:
+            rich_console.print(f"  [red]✗ Failed![/red]")
+            for err in result.errors:
+                rich_console.print(f"    {err}")
+
+        total_skipped.extend(result.skipped)
+
+    total_time = _time.time() - total_start
+
+    # Count existing shorts in output folder
+    shorts_dir = Path(ch_config.output_folder)
+    if shorts_dir.exists():
+        shorts_created = len(list(shorts_dir.glob("*_part*.mp4")))
+
+    # ─── DETAILED REPORT ─────────────────────────────────────────
+    _print_longform_report(
+        channel_name=ch_config.name,
+        channel_id=channel,
+        total_input_videos=total_input_videos,
+        results=results,
+        total_skipped=total_skipped,
+        duplicates=duplicates,
+        shorts_created=shorts_created,
+        total_time=total_time,
+        output_base=output_base,
+    )
+
+
+def _print_longform_report(
+    channel_name: str,
+    channel_id: str,
+    total_input_videos: int,
+    results: list[tuple[str, LongformResult]],
+    total_skipped: list[str],
+    duplicates: list[str],
+    shorts_created: int,
+    total_time: float,
+    output_base: Path,
+) -> None:
+    """Print detailed processing report to terminal."""
+    successful = [r for _, r in results if r.success]
+    failed = [r for _, r in results if not r.success]
+
+    total_input_dur = sum(r.input_duration for _, r in results)
+    total_output_dur = sum(r.output_duration for _, r in results if r.success)
+    total_size = sum(r.file_size for _, r in results if r.success)
+
+    rich_console.print("\n")
+    rich_console.print("[bold cyan]" + "═" * 60 + "[/bold cyan]")
+    rich_console.print("[bold cyan]           PROCESSING REPORT[/bold cyan]")
+    rich_console.print("[bold cyan]" + "═" * 60 + "[/bold cyan]")
+
+    # Channel info
+    rich_console.print(f"\n  [bold]Channel:[/bold]               {channel_name} ({channel_id})")
+
+    # Input stats
+    rich_console.print(f"\n  [bold]── Input ──[/bold]")
+    rich_console.print(f"  Videos detected:         {total_input_videos}")
+    rich_console.print(f"  Videos processed:        {sum(r.input_count for _, r in results)}")
+    rich_console.print(f"  Skipped/failed files:    {len(total_skipped)}")
+    rich_console.print(f"  Duplicates detected:     {len(duplicates)}")
+    rich_console.print(f"  Total input duration:    {total_input_dur / 60:.1f} min ({total_input_dur / 3600:.2f} hrs)")
+
+    # Output stats
+    rich_console.print(f"\n  [bold]── Output ──[/bold]")
+    rich_console.print(f"  Short-form videos:       {shorts_created}")
+    rich_console.print(f"  Long-form videos:        {len(successful)} created, {len(failed)} failed")
+    rich_console.print(f"  Total output duration:   {total_output_dur / 60:.1f} min ({total_output_dur / 3600:.2f} hrs)")
+    rich_console.print(f"  Total output size:       {total_size / 1024 / 1024:.0f} MB ({total_size / 1024 / 1024 / 1024:.2f} GB)")
+
+    # Processing stats
+    rich_console.print(f"\n  [bold]── Performance ──[/bold]")
+    rich_console.print(f"  Total processing time:   {total_time:.0f}s ({total_time / 60:.1f} min)")
+    if total_input_dur > 0:
+        speed = total_input_dur / total_time
+        rich_console.print(f"  Processing speed:        {speed:.1f}x realtime")
+
+    # Output files
+    rich_console.print(f"\n  [bold]── Output Files ──[/bold]")
+    for folder_name, result in results:
+        status = "[green]✓[/green]" if result.success else "[red]✗[/red]"
+        rich_console.print(f"  {status} {result.output_path}")
+        if result.success:
+            rich_console.print(f"      Duration: {result.output_duration / 60:.1f} min | Size: {result.file_size / 1024 / 1024:.0f} MB")
+
+    # Warnings
+    if total_skipped or duplicates:
+        rich_console.print(f"\n  [bold]── Warnings ──[/bold]")
+        for s in total_skipped:
+            rich_console.print(f"  [yellow]⚠ Skipped: {s}[/yellow]")
+        for d in duplicates:
+            rich_console.print(f"  [yellow]⚠ Possible duplicate: {d}[/yellow]")
+
+    # Errors
+    all_errors = []
+    for _, r in results:
+        all_errors.extend(r.errors)
+    if all_errors:
+        rich_console.print(f"\n  [bold]── Errors ──[/bold]")
+        for e in all_errors:
+            rich_console.print(f"  [red]✗ {e}[/red]")
+
+    rich_console.print("\n[bold cyan]" + "═" * 60 + "[/bold cyan]")
 
 
 if __name__ == "__main__":

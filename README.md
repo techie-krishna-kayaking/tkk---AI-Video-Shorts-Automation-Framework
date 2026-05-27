@@ -106,13 +106,14 @@
 
 1. [Tech Stack](#️-tech-stack)
 2. [Multi-Channel Architecture](#-multi-channel-architecture)
-3. [macOS Setup (All Steps)](#-macos-complete-setup)
-4. [Windows Setup (All Steps)](#-windows-complete-setup)
-5. [YouTube API & Credentials Setup](#youtube-api--credentials-setup)
-6. [Configuration Reference](#configuration-reference)
-7. [Architecture & Pipeline](#architecture)
-8. [Docker (Linux Servers)](#docker-linux-servers)
-9. [Troubleshooting](#troubleshooting)
+3. [Long-form Video Generation](#-long-form-video-generation)
+4. [macOS Setup (All Steps)](#-macos-complete-setup)
+5. [Windows Setup (All Steps)](#-windows-complete-setup)
+6. [YouTube API & Credentials Setup](#youtube-api--credentials-setup)
+7. [Configuration Reference](#configuration-reference)
+8. [Architecture & Pipeline](#architecture)
+9. [Docker (Linux Servers)](#docker-linux-servers)
+10. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -142,7 +143,10 @@ output/                          ← Flat per-channel output
 │   ├── trip_01_gopro_beach_part001.mp4
 │   ├── trip_01_gopro_beach_part001.json
 │   ├── trip_01_gopro_sunset_part001.mp4
-│   └── trip_02_drone_flight_part001.mp4
+│   ├── trip_02_drone_flight_part001.mp4
+│   └── longform/               ← Long-form merged videos
+│       ├── trip_01_full.mp4     ← All trip_01 clips merged (16:9)
+│       └── trip_02_full.mp4
 ├── techie_krishna_kayaking/
 │   └── python_tips_part001.mp4
 ├── krishna_kayaking/
@@ -171,8 +175,10 @@ assets/social/                   ← Per-channel socials overlays
 | Channel Type | Rendering | Description |
 |---|---|---|
 | `tutorial` | Smart crop 16:9 → 9:16 | Face-aware cropping, fills the entire vertical frame |
-| `gopro` | White letterbox | Video centered on white 9:16 canvas (no camera area lost), "Watch the full video on YT" text at top, socials at bottom |
+| `gopro` | White letterbox | Video centered on white 9:16 canvas (no camera area lost), "WATCH THE FULL VIDEO" + YouTube logo at top, socials at bottom |
 | `vertical` | Trim only | Already 9:16, just split at boundaries |
+
+**Additionally for `gopro` channels:** Long-form videos are auto-generated per subfolder (see below).
 
 ### CLI Quick Reference
 
@@ -180,11 +186,20 @@ assets/social/                   ← Per-channel socials overlays
 # List all configured channels
 python -m app.main channels
 
-# Process ALL channels at once (easiest way)
+# Process ALL channels at once (shorts + long-form for gopro channels)
 python -m app.main batch-all --fast --max-clips 3
 
-# Process a single channel
+# Process a single channel (auto-generates long-form for gopro channels)
 python -m app.main batch --channel krgd_vlogs --fast --max-clips 3
+
+# Generate ONLY long-form videos (no shorts)
+python -m app.main longform --channel krgd_vlogs
+
+# Long-form for a specific subfolder only
+python -m app.main longform --channel krgd_vlogs --subfolder 2026-05-14
+
+# Long-form without social watermark
+python -m app.main longform --channel krgd_vlogs --no-overlay
 
 # Process a single video for a channel
 python -m app.main process input/krgd_vlogs/trip_01/beach.mp4 --channel krgd_vlogs
@@ -197,6 +212,96 @@ python -m app.main watch --channel krgd_vlogs --fast
 
 # Fast mode: uses tiny Whisper model + MPS GPU, ~2x faster
 python -m app.main process video.mp4 --channel krgd_vlogs --fast
+```
+
+---
+
+## 🎬 Long-form Video Generation
+
+For **gopro** channels, the framework automatically generates long-form vlog compilations in addition to short-form clips.
+
+### How It Works
+
+1. Each **subfolder** in the channel's input directory becomes one long-form video
+2. All clips within the subfolder are **sorted chronologically** (GoPro naming-aware: video number → chapter order)
+3. Clips are merged into a single continuous **16:9 landscape** video
+4. A **social branding watermark** is applied in the top-left corner (subtle, 15% width, 60% opacity)
+5. Output uses high-quality encoding (CRF 18, medium preset, AAC 192k)
+
+### GoPro File Ordering
+
+GoPro cameras name files as `GHxxyyyy.MP4` where `xx` = chapter, `yyyy` = video number.
+The framework sorts correctly:
+
+```
+GH011244.MP4  →  Video 1244, Chapter 1  (plays first)
+GH021244.MP4  →  Video 1244, Chapter 2
+GH031244.MP4  →  Video 1244, Chapter 3
+GH011245.MP4  →  Video 1245, Chapter 1  (plays after all 1244 chapters)
+GH021245.MP4  →  Video 1245, Chapter 2
+```
+
+### Output Structure
+
+```
+output/krgd_vlogs/
+├── 2026-05-14_gh011244_part001.mp4     ← Short-form clips (9:16)
+├── 2026-05-14_gh011244_part002.mp4
+└── longform/
+    ├── 2026-05-14_full.mp4             ← All May 14 clips merged (16:9)
+    └── 2026-05-15_full.mp4             ← All May 15 clips merged (16:9)
+```
+
+### Commands
+
+```bash
+# Generate long-form videos only (standalone)
+python -m app.main longform --channel krgd_vlogs
+
+# Process a specific subfolder
+python -m app.main longform --channel krgd_vlogs --subfolder 2026-05-14
+
+# Skip the social watermark overlay
+python -m app.main longform --channel krgd_vlogs --no-overlay
+
+# batch and batch-all auto-trigger long-form for gopro channels
+python -m app.main batch --channel krgd_vlogs --fast --max-clips 3
+python -m app.main batch-all --fast --max-clips 3
+```
+
+### Processing Report
+
+After long-form generation completes, a detailed report prints:
+
+```
+══════════════════════════════════════════════════════════════
+           PROCESSING REPORT
+══════════════════════════════════════════════════════════════
+
+  Channel:               krgd vlogs (krgd_vlogs)
+
+  ── Input ──
+  Videos detected:         8
+  Videos processed:        8
+  Skipped/failed files:    0
+  Duplicates detected:     0
+  Total input duration:    78.5 min (1.31 hrs)
+
+  ── Output ──
+  Short-form videos:       24
+  Long-form videos:        1 created, 0 failed
+  Total output duration:   78.2 min (1.30 hrs)
+  Total output size:       2304 MB (2.25 GB)
+
+  ── Performance ──
+  Total processing time:   1845s (30.8 min)
+  Processing speed:        2.6x realtime
+
+  ── Output Files ──
+  ✓ output/krgd_vlogs/longform/2026-05-14_full.mp4
+      Duration: 78.2 min | Size: 2304 MB
+
+══════════════════════════════════════════════════════════════
 ```
 
 ---
