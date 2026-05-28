@@ -11,6 +11,7 @@ Rules:
 
 from __future__ import annotations
 
+import json
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -46,6 +47,38 @@ CHANNEL_HASHTAGS_LONGFORM = {
 
 # Channels to schedule (only those with output videos)
 CHANNELS_TO_SCHEDULE = ["krgd_vlogs", "tkk_live_shorts"]
+
+# Tracking file to avoid duplicate uploads
+UPLOAD_HISTORY_FILE = Path("temp/upload_history.json")
+
+
+def load_upload_history() -> dict:
+    """Load the record of previously uploaded videos."""
+    if UPLOAD_HISTORY_FILE.exists():
+        try:
+            return json.loads(UPLOAD_HISTORY_FILE.read_text())
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def save_upload_history(history: dict) -> None:
+    """Save the upload history to disk."""
+    UPLOAD_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    UPLOAD_HISTORY_FILE.write_text(json.dumps(history, indent=2))
+
+
+def is_already_uploaded(history: dict, channel_name: str, video_path: Path) -> bool:
+    """Check if a video has already been uploaded for a channel."""
+    channel_history = history.get(channel_name, [])
+    return str(video_path) in channel_history
+
+
+def mark_as_uploaded(history: dict, channel_name: str, video_path: Path) -> None:
+    """Record a video as uploaded."""
+    if channel_name not in history:
+        history[channel_name] = []
+    history[channel_name].append(str(video_path))
 
 
 def clean_title(filename_stem: str) -> str:
@@ -93,7 +126,7 @@ def is_longform(video_path: Path) -> bool:
     return "longform" in video_path.parts
 
 
-def schedule_channel(channel_name: str, dry_run: bool = True) -> None:
+def schedule_channel(channel_name: str, dry_run: bool = True, history: dict | None = None) -> None:
     """Schedule uploads for a single channel."""
     config = get_config()
     channel_config = config.channels.get(channel_name)
@@ -101,17 +134,25 @@ def schedule_channel(channel_name: str, dry_run: bool = True) -> None:
         print(f"  [SKIP] Channel '{channel_name}' not found in config")
         return
 
+    if history is None:
+        history = {}
+
     output_dir = Path(channel_config.output_folder)
     if not output_dir.exists():
         print(f"  [SKIP] Output folder not found: {output_dir}")
         return
 
-    # Shorts are in the top-level output folder
-    shorts = sorted(output_dir.glob("*.mp4"))
+    # Shorts are in the top-level output folder — skip already uploaded
+    all_shorts = sorted(output_dir.glob("*.mp4"))
+    shorts = [v for v in all_shorts if not is_already_uploaded(history, channel_name, v)]
 
-    # Long-form videos are in the longform/ subfolder
+    # Long-form videos are in the longform/ subfolder — skip already uploaded
     longform_dir = output_dir / "longform"
-    longforms = sorted(longform_dir.glob("*.mp4")) if longform_dir.exists() else []
+    all_longforms = sorted(longform_dir.glob("*.mp4")) if longform_dir.exists() else []
+    longforms = [v for v in all_longforms if not is_already_uploaded(history, channel_name, v)]
+
+    skipped_shorts = len(all_shorts) - len(shorts)
+    skipped_lf = len(all_longforms) - len(longforms)
 
     hashtags_shorts = CHANNEL_HASHTAGS_SHORTS.get(channel_name, "")
     hashtags_longform = CHANNEL_HASHTAGS_LONGFORM.get(channel_name, "")
@@ -119,8 +160,8 @@ def schedule_channel(channel_name: str, dry_run: bool = True) -> None:
 
     now = datetime.now(LOCAL_TZ)
     print(f"\n  Channel: {channel_config.name}")
-    print(f"  Shorts available: {len(shorts)}")
-    print(f"  Long-form available: {len(longforms)}")
+    print(f"  Shorts available: {len(shorts)} (skipped {skipped_shorts} already uploaded)")
+    print(f"  Long-form available: {len(longforms)} (skipped {skipped_lf} already uploaded)")
 
     # --- Schedule Shorts ---
     shorts_times = get_shorts_schedule(now)
@@ -175,6 +216,8 @@ def schedule_channel(channel_name: str, dry_run: bool = True) -> None:
         if result.success:
             print(f"✓ ({result.url})")
             success_count += 1
+            mark_as_uploaded(history, channel_name, video)
+            save_upload_history(history)
         else:
             print(f"✗ ({result.error})")
 
@@ -192,15 +235,20 @@ def main():
     print(f" Schedule: {SHORTS_PER_DAY} shorts/day × {SHORTS_DAYS} days")
     print(f"           Times: {', '.join(f'{h}:{m:02d}' for h, m in SHORTS_TIMES)}")
     print(f"           Long-form: Thursdays at {LONGFORM_TIME[0]}:{LONGFORM_TIME[1]:02d}")
+    print(f" History:  {UPLOAD_HISTORY_FILE}")
     print("=" * 64)
 
+    history = load_upload_history()
+
     for channel in CHANNELS_TO_SCHEDULE:
-        schedule_channel(channel, dry_run=dry_run)
+        schedule_channel(channel, dry_run=dry_run, history=history)
 
     print("\n" + "=" * 64)
     if dry_run:
         print(" To execute uploads, run:")
         print("   python3 schedule_uploads.py --execute")
+        print(" To reset history (re-upload everything):")
+        print("   rm temp/upload_history.json")
     print("=" * 64)
 
 
