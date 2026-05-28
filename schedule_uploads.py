@@ -33,10 +33,15 @@ SHORTS_TIMES = [(15, 7), (17, 7), (19, 7)]  # 3:07 PM, 5:07 PM, 7:07 PM
 LONGFORM_DAY = 3  # Thursday (0=Mon, 3=Thu)
 LONGFORM_TIME = (19, 7)  # 7:07 PM
 
-# Channel-specific hashtag descriptions
-CHANNEL_HASHTAGS = {
+# Channel-specific hashtags
+CHANNEL_HASHTAGS_SHORTS = {
     "krgd_vlogs": "#krgdVlog #shorts",
     "tkk_live_shorts": "#TKK #shorts",
+}
+
+CHANNEL_HASHTAGS_LONGFORM = {
+    "krgd_vlogs": "#krgdVlog",
+    "tkk_live_shorts": "#TKK",
 }
 
 # Channels to schedule (only those with output videos)
@@ -84,10 +89,8 @@ def get_next_thursday(start_date: datetime) -> datetime:
 
 
 def is_longform(video_path: Path) -> bool:
-    """Check if a video is long-form (not a part/clip)."""
-    name = video_path.stem.lower()
-    # If it doesn't have _partXXX suffix, it's likely long-form
-    return "part" not in name and "vertical" not in name
+    """Check if a video is long-form (in the longform/ subfolder)."""
+    return "longform" in video_path.parts
 
 
 def schedule_channel(channel_name: str, dry_run: bool = True) -> None:
@@ -103,16 +106,15 @@ def schedule_channel(channel_name: str, dry_run: bool = True) -> None:
         print(f"  [SKIP] Output folder not found: {output_dir}")
         return
 
-    # Separate shorts from long-form
-    all_videos = sorted(output_dir.glob("*.mp4"))
-    shorts = [v for v in all_videos if not is_longform(v)]
-    longforms = [v for v in all_videos if is_longform(v)]
+    # Shorts are in the top-level output folder
+    shorts = sorted(output_dir.glob("*.mp4"))
 
-    # If all videos look like parts/shorts, use them all as shorts
-    if not shorts and all_videos:
-        shorts = all_videos
+    # Long-form videos are in the longform/ subfolder
+    longform_dir = output_dir / "longform"
+    longforms = sorted(longform_dir.glob("*.mp4")) if longform_dir.exists() else []
 
-    hashtags = CHANNEL_HASHTAGS.get(channel_name, "")
+    hashtags_shorts = CHANNEL_HASHTAGS_SHORTS.get(channel_name, "")
+    hashtags_longform = CHANNEL_HASHTAGS_LONGFORM.get(channel_name, "")
     default_tags = channel_config.youtube.default_tags if channel_config.youtube else []
 
     now = datetime.now(LOCAL_TZ)
@@ -129,7 +131,7 @@ def schedule_channel(channel_name: str, dry_run: bool = True) -> None:
 
     uploads = []
     for idx, (video, publish_at) in enumerate(zip(shorts_to_schedule, shorts_times)):
-        title = f"{clean_title(video.stem)} {hashtags}"
+        title = f"{clean_title(video.stem)} {hashtags_shorts}"
         print(f"  {idx+1:2d}. {video.name}")
         print(f"      Title: {title}")
         print(f"      Publish: {publish_at.strftime('%a %b %d, %Y at %I:%M %p %Z')}")
@@ -139,7 +141,7 @@ def schedule_channel(channel_name: str, dry_run: bool = True) -> None:
     if longforms:
         next_thu = get_next_thursday(now)
         lf = longforms[0]
-        title = f"{clean_title(lf.stem)} {hashtags}"
+        title = f"{clean_title(lf.stem)} {hashtags_longform}"
         print(f"\n  Long-form Schedule:")
         print(f"  {'─' * 60}")
         print(f"  1. {lf.name}")
@@ -159,6 +161,8 @@ def schedule_channel(channel_name: str, dry_run: bool = True) -> None:
     success_count = 0
     for video, title, publish_at in uploads:
         publish_iso = publish_at.isoformat()
+        is_lf = is_longform(video)
+        hashtags = hashtags_longform if is_lf else hashtags_shorts
         print(f"  Uploading: {video.name}...", end=" ", flush=True)
         result = uploader.upload(
             video_path=video,
