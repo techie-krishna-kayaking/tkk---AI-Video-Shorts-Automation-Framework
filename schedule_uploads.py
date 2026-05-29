@@ -28,8 +28,8 @@ logger = get_logger(__name__)
 LOCAL_TZ = ZoneInfo("America/Los_Angeles")  # Adjust if needed
 
 SHORTS_PER_DAY = 3
-SHORTS_DAYS = 3
-SHORTS_TIMES = [(15, 7), (17, 7), (19, 7)]  # 3:07 PM, 5:07 PM, 7:07 PM
+SHORTS_DAYS = 7
+SHORTS_TIMES = [(13, 7), (15, 5), (17, 7)]  # 1:07 PM, 3:05 PM, 5:07 PM
 
 LONGFORM_DAY = 3  # Thursday (0=Mon, 3=Thu)
 LONGFORM_TIME = (19, 7)  # 7:07 PM
@@ -53,13 +53,64 @@ UPLOAD_HISTORY_FILE = Path("temp/upload_history.json")
 
 
 def load_upload_history() -> dict:
-    """Load the record of previously uploaded videos."""
+    """Load the record of previously uploaded videos.
+
+    Format:
+    {
+        "channels": {
+            "krgd_vlogs": {
+                "last_scheduled": "2026-06-01T19:07:00-07:00",
+                "uploads": [
+                    {
+                        "file": "gh011244_part001.mp4",
+                        "path": "output/krgd_vlogs/gh011244_part001.mp4",
+                        "title": "Gh011244 Part001 #krgdVlog #shorts",
+                        "type": "short",
+                        "scheduled_at": "2026-05-30T13:07:00-07:00",
+                        "uploaded_at": "2026-05-28T19:30:00-07:00",
+                        "youtube_url": "https://www.youtube.com/watch?v=..."
+                    }
+                ]
+            }
+        }
+    }
+    """
     if UPLOAD_HISTORY_FILE.exists():
         try:
-            return json.loads(UPLOAD_HISTORY_FILE.read_text())
+            data = json.loads(UPLOAD_HISTORY_FILE.read_text())
+            # Migrate old format if needed
+            if "channels" not in data:
+                return _migrate_old_history(data)
+            return data
         except (json.JSONDecodeError, OSError):
-            return {}
-    return {}
+            return {"channels": {}}
+    return {"channels": {}}
+
+
+def _migrate_old_history(old: dict) -> dict:
+    """Migrate from old flat list format to new detailed format."""
+    new = {"channels": {}}
+    for key, value in old.items():
+        if key.endswith("_last_scheduled"):
+            channel = key.replace("_last_scheduled", "")
+            if channel not in new["channels"]:
+                new["channels"][channel] = {"last_scheduled": None, "uploads": []}
+            new["channels"][channel]["last_scheduled"] = value
+        elif isinstance(value, list):
+            if key not in new["channels"]:
+                new["channels"][key] = {"last_scheduled": None, "uploads": []}
+            for path_str in value:
+                p = Path(path_str)
+                new["channels"][key]["uploads"].append({
+                    "file": p.name,
+                    "path": path_str,
+                    "title": "(migrated - title unknown)",
+                    "type": "longform" if "longform" in path_str else "short",
+                    "scheduled_at": "(migrated)",
+                    "uploaded_at": "2026-05-28",
+                    "youtube_url": "(migrated - url unknown)",
+                })
+    return new
 
 
 def save_upload_history(history: dict) -> None:
@@ -68,17 +119,50 @@ def save_upload_history(history: dict) -> None:
     UPLOAD_HISTORY_FILE.write_text(json.dumps(history, indent=2))
 
 
+def get_last_scheduled_date(history: dict, channel_name: str) -> datetime | None:
+    """Get the last scheduled end date for a channel."""
+    ch = history.get("channels", {}).get(channel_name, {})
+    last = ch.get("last_scheduled")
+    if last:
+        return datetime.fromisoformat(last)
+    return None
+
+
+def set_last_scheduled_date(history: dict, channel_name: str, dt: datetime) -> None:
+    """Record the last scheduled end date for a channel."""
+    if channel_name not in history.get("channels", {}):
+        history.setdefault("channels", {})[channel_name] = {"last_scheduled": None, "uploads": []}
+    history["channels"][channel_name]["last_scheduled"] = dt.isoformat()
+
+
 def is_already_uploaded(history: dict, channel_name: str, video_path: Path) -> bool:
     """Check if a video has already been uploaded for a channel."""
-    channel_history = history.get(channel_name, [])
-    return str(video_path) in channel_history
+    ch = history.get("channels", {}).get(channel_name, {})
+    uploaded_paths = [u["path"] for u in ch.get("uploads", [])]
+    return str(video_path) in uploaded_paths
 
 
-def mark_as_uploaded(history: dict, channel_name: str, video_path: Path) -> None:
-    """Record a video as uploaded."""
-    if channel_name not in history:
-        history[channel_name] = []
-    history[channel_name].append(str(video_path))
+def mark_as_uploaded(
+    history: dict,
+    channel_name: str,
+    video_path: Path,
+    title: str = "",
+    scheduled_at: str = "",
+    youtube_url: str = "",
+    video_type: str = "short",
+) -> None:
+    """Record a video as uploaded with full details."""
+    if channel_name not in history.get("channels", {}):
+        history.setdefault("channels", {})[channel_name] = {"last_scheduled": None, "uploads": []}
+    history["channels"][channel_name]["uploads"].append({
+        "file": video_path.name,
+        "path": str(video_path),
+        "title": title,
+        "type": video_type,
+        "scheduled_at": scheduled_at,
+        "uploaded_at": datetime.now(LOCAL_TZ).isoformat(),
+        "youtube_url": youtube_url,
+    })
 
 
 def clean_title(filename_stem: str) -> str:
@@ -159,12 +243,23 @@ def schedule_channel(channel_name: str, dry_run: bool = True, history: dict | No
     default_tags = channel_config.youtube.default_tags if channel_config.youtube else []
 
     now = datetime.now(LOCAL_TZ)
-    print(f"\n  Channel: {channel_config.name}")
+
+    # Use the last scheduled end date to avoid overlaps
+    # If previous run scheduled up to Jun 5, next run starts from Jun 5
+    last_scheduled = get_last_scheduled_date(history, channel_name)
+    if last_scheduled and last_scheduled > now:
+        start_from = last_scheduled
+        print(f"\n  Channel: {channel_config.name}")
+        print(f"  Continuing from last scheduled date: {last_scheduled.strftime('%a %b %d, %Y')}")
+    else:
+        start_from = now
+        print(f"\n  Channel: {channel_config.name}")
+
     print(f"  Shorts available: {len(shorts)} (skipped {skipped_shorts} already uploaded)")
     print(f"  Long-form available: {len(longforms)} (skipped {skipped_lf} already uploaded)")
 
     # --- Schedule Shorts ---
-    shorts_times = get_shorts_schedule(now)
+    shorts_times = get_shorts_schedule(start_from)
     shorts_to_schedule = shorts[: len(shorts_times)]  # Cap at available slots
 
     print(f"\n  Shorts Schedule ({len(shorts_to_schedule)} videos):")
@@ -180,7 +275,7 @@ def schedule_channel(channel_name: str, dry_run: bool = True, history: dict | No
 
     # --- Schedule Long-form ---
     if longforms:
-        next_thu = get_next_thursday(now)
+        next_thu = get_next_thursday(start_from)
         lf = longforms[0]
         title = f"{clean_title(lf.stem)} {hashtags_longform}"
         print(f"\n  Long-form Schedule:")
@@ -218,10 +313,22 @@ def schedule_channel(channel_name: str, dry_run: bool = True, history: dict | No
         if result.success:
             print(f"✓ ({result.url})")
             success_count += 1
-            mark_as_uploaded(history, channel_name, video)
+            mark_as_uploaded(
+                history, channel_name, video,
+                title=title,
+                scheduled_at=publish_at.isoformat(),
+                youtube_url=result.url,
+                video_type="longform" if is_lf else "short",
+            )
             save_upload_history(history)
         else:
             print(f"✗ ({result.error})")
+
+    # Record the last scheduled date (last time slot in this batch)
+    if success_count > 0 and shorts_times:
+        last_time = shorts_times[-1]
+        set_last_scheduled_date(history, channel_name, last_time)
+        save_upload_history(history)
 
     print(f"\n  Done! {success_count}/{len(uploads)} uploaded successfully.")
 
