@@ -276,7 +276,19 @@ class Scheduler:
                 if idx > 0:
                     current_time += timedelta(hours=interval_hours)
 
-            title = f"{title_prefix} Part {idx + 1}" if title_prefix else path.stem
+            # Try to get descriptive title:
+            # 1. From metadata JSON (if it exists)
+            # 2. Parse from filename (remove _partXXX, replace underscores with spaces, title case)
+            # 3. Use title_prefix if provided
+            metadata_title = self._get_video_title_from_metadata(path)
+            if metadata_title:
+                title = metadata_title
+            else:
+                filename_title = self._get_title_from_filename(path)
+                if title_prefix:
+                    title = f"{title_prefix}: {filename_title}"
+                else:
+                    title = filename_title
 
             upload = ScheduledUpload(
                 video_path=path,
@@ -313,6 +325,46 @@ class Scheduler:
             return None
         # Return the one with latest publish_at
         return max(channel_uploads, key=lambda u: u.publish_at)
+
+    def _get_video_title_from_metadata(self, video_path: Path) -> str | None:
+        """
+        Try to read a descriptive title from the video's .json metadata file.
+        Returns None if metadata file doesn't exist or is unreadable.
+        """
+        json_path = video_path.with_suffix(".json")
+        if not json_path.exists():
+            return None
+        try:
+            data = json.loads(json_path.read_text())
+            # Try common metadata fields for title
+            title = (
+                data.get("title")
+                or data.get("clip_title")
+                or data.get("video_title")
+                or data.get("name")
+            )
+            if title and isinstance(title, str) and title.strip():
+                return title.strip()
+        except (json.JSONDecodeError, OSError) as e:
+            logger.debug("metadata_title_read_failed", path=str(json_path), error=str(e))
+        return None
+
+    def _get_title_from_filename(self, video_path: Path) -> str:
+        """
+        Generate a readable title from the filename by:
+        1. Removing the _partXXX suffix
+        2. Replacing underscores with spaces
+        3. Title-casing the result
+        """
+        import re
+        stem = video_path.stem
+        # Remove _partXXX suffix (e.g., _part001, _part123)
+        stem = re.sub(r'_part\d{3}$', '', stem)
+        # Replace underscores with spaces
+        title = stem.replace('_', ' ')
+        # Title case each word
+        title = ' '.join(word.capitalize() for word in title.split())
+        return title
 
     def execute_pending(self) -> list[UploadResult]:
         """Execute all pending scheduled uploads."""
