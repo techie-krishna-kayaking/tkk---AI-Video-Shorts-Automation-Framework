@@ -50,15 +50,31 @@ class CaptionGenerator:
             if segment.end < clip_start:
                 continue
 
-            # Split into word groups for better readability
+            # Prefer word-level caption chunks, but fall back to segment-level text
+            # when word timestamps are unavailable (e.g. fast mode).
             word_groups = self._split_into_groups(segment.words, clip_start, clip_end)
 
-            for words in word_groups:
-                if not words:
+            if word_groups:
+                caption_items: list[tuple[float, float, str]] = []
+                for words in word_groups:
+                    if not words:
+                        continue
+                    start_time = max(0, words[0].start - clip_start)
+                    end_time = max(0, words[-1].end - clip_start)
+                    text = " ".join(w.text for w in words).strip()
+                    if text:
+                        caption_items.append((start_time, end_time, text))
+            else:
+                seg_start = max(segment.start, clip_start)
+                seg_end = min(segment.end, clip_end) if clip_end is not None else segment.end
+                seg_text = segment.text.strip()
+                caption_items = []
+                if seg_end > seg_start and seg_text:
+                    caption_items.append((max(0, seg_start - clip_start), max(0, seg_end - clip_start), seg_text))
+
+            for start_time, end_time, text in caption_items:
+                if end_time <= start_time:
                     continue
-                start_time = max(0, words[0].start - clip_start)
-                end_time = max(0, words[-1].end - clip_start)
-                text = " ".join(w.text for w in words)
 
                 lines.append(str(counter))
                 lines.append(
@@ -122,20 +138,34 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
             word_groups = self._split_into_groups(segment.words, clip_start, clip_end)
 
-            for words in word_groups:
-                if not words:
-                    continue
-                start_time = max(0, words[0].start - clip_start)
-                end_time = max(0, words[-1].end - clip_start)
-                text = " ".join(w.text for w in words)
+            if word_groups:
+                for words in word_groups:
+                    if not words:
+                        continue
+                    start_time = max(0, words[0].start - clip_start)
+                    end_time = max(0, words[-1].end - clip_start)
+                    if end_time <= start_time:
+                        continue
 
-                # Use karaoke-style word highlighting
-                karaoke_text = self._build_karaoke_text(words, clip_start)
+                    # Use karaoke-style word highlighting when word timings are available.
+                    karaoke_text = self._build_karaoke_text(words, clip_start)
+
+                    events.append(
+                        f"Dialogue: 0,{self._format_ass_time(start_time)},"
+                        f"{self._format_ass_time(end_time)},Default,,0,0,0,,"
+                        f"{karaoke_text}"
+                    )
+            else:
+                seg_start = max(segment.start, clip_start)
+                seg_end = min(segment.end, clip_end) if clip_end is not None else segment.end
+                seg_text = segment.text.strip()
+                if seg_end <= seg_start or not seg_text:
+                    continue
 
                 events.append(
-                    f"Dialogue: 0,{self._format_ass_time(start_time)},"
-                    f"{self._format_ass_time(end_time)},Default,,0,0,0,,"
-                    f"{karaoke_text}"
+                    f"Dialogue: 0,{self._format_ass_time(max(0, seg_start - clip_start))},"
+                    f"{self._format_ass_time(max(0, seg_end - clip_start))},Default,,0,0,0,,"
+                    f"{seg_text}"
                 )
 
         content = header + "\n".join(events) + "\n"

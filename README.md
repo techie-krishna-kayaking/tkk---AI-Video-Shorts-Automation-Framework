@@ -184,9 +184,27 @@ assets/social/                   ← Per-channel socials overlays
 ### CLI Quick Reference
 
 ```bash
-# List all configured channels
+# MAIN COMMAND 1: List all configured channels
 python -m app.main channels
 
+# MAIN COMMAND 2: Fast batch-all (quick runs/testing)
+python -m app.main batch-all --fast --max-clips 1008
+
+# MAIN COMMAND 3: Quality batch-all (final runs)
+python -m app.main batch-all --max-clips 1008
+
+# MAIN COMMAND 4: Upload one rendered video
+python -m app.main upload output/krgd_vlogs/example_part001.mp4 --channel krgd_vlogs
+```
+
+Fast vs non-fast:
+
+- Use `--fast` for speed.
+- Omit `--fast` for better transcription/caption quality.
+
+### Other CLI Commands
+
+```bash
 # Process a mixed-media vlog folder (phone videos + photos + action cam clips)
 python -m app.main vlog input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs
 
@@ -195,12 +213,6 @@ python -m app.main trip input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_B
 
 # Refresh trending audio manifests from configured provider
 python -m app.main refresh-trending-audio --limit 50
-
-# Process ALL channels at once (smart routing by channel type):
-# - type='vlog': long-form first + shorts from each mixed-media subfolder
-# - type='gopro': shorts from videos + auto-generated long-form per subfolder
-# - type='tutorial'|other: shorts from videos only
-python -m app.main batch-all --fast --max-clips 3
 
 # Process a single channel (auto-generates long-form for gopro channels)
 python -m app.main batch --channel krgd_vlogs --fast --max-clips 3
