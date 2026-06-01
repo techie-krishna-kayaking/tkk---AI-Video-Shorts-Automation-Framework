@@ -344,7 +344,9 @@ Upload multiple videos automatically over 7 days at specific times per day:
 1. Schedule videos with a single command
 2. Videos are queued with precise publish times based on your channel's daily schedule
 3. Run `execute-schedule` to upload all pending videos at their scheduled times
-4. If you run `schedule` again on day 6-7, it automatically continues from where the last upload left off
+4. On successful upload, each video is moved to `output/<channel>/uploaded/`
+5. Successful upload metadata is appended to `temp/upload_history.json`
+6. If you run `schedule` again on day 6-7, it automatically continues from where the last upload left off
 
 **Example: Upload 8 videos across 2 days**
 
@@ -356,6 +358,10 @@ python3 -m app.main schedule output/tkk_live_shorts/ --channel tkk_live_shorts
 
 # Execute uploads when ready (runs at each scheduled time)
 python3 -m app.main execute-schedule
+
+# Then verify history and moved files
+cat temp/upload_history.json
+ls output/tkk_live_shorts/uploaded/
 ```
 
 **Configuration:**
@@ -472,93 +478,23 @@ After long-form generation completes, a detailed report prints:
 
 ## 📅 Scheduled Uploads
 
-The framework includes an intelligent upload scheduler (`schedule_uploads.py`) that distributes Shorts and long-form uploads across days with specific time slots per channel.
+Use the built-in CLI scheduling flow (`python3 -m app.main schedule` + `python3 -m app.main execute-schedule`) described in **Automated YouTube Upload Features → Scheduled Batch Uploads (7-Day Spread)**.
 
-### Schedule Rules
-
-| Type | Frequency | Times (Local) |
-|------|-----------|---------------|
-| **Shorts** | 3 per day × 3 days | 3:07 PM, 5:07 PM, 7:07 PM |
-| **Long-form** | 1 per Thursday | 7:07 PM |
-
-### Channel Hashtags
-
-Each channel automatically appends its hashtag to video titles:
-
-| Channel | Hashtag |
-|---------|---------|
-| `krgd_vlogs` | `#krgdVlog #shorts` |
-| `tkk_live_shorts` | `#TKK #shorts` |
-
-### How It Works
-
-1. Videos are picked from each channel's output folder in **sequential filename order**
-2. Titles are auto-generated from filenames (cleaned: underscores → spaces, timestamps removed, title-cased)
-3. Videos are uploaded as **private** with a `publishAt` schedule time
-4. YouTube auto-publishes them at the scheduled time
-5. Long-form videos are only scheduled if available (non-part files in the output folder)
-
-### Usage
+### Canonical Workflow
 
 ```bash
-# Preview the schedule (dry run — no uploads)
-python3 schedule_uploads.py
+# 1) Schedule videos for a channel (4/day for 7 days using channel schedule_times)
+python3 -m app.main schedule output/tkk_live_shorts/ --channel tkk_live_shorts
 
-# Execute uploads for real
-python3 schedule_uploads.py --execute
+# 2) Execute all pending uploads
+python3 -m app.main execute-schedule
+
+# 3) Verify moved files and upload history
+ls output/tkk_live_shorts/uploaded/
+cat temp/upload_history.json
 ```
 
-### Example Output (Dry Run)
-
-```
-================================================================
- YouTube Upload Scheduler
-================================================================
- Mode: DRY RUN (preview)
- Date: Thu May 28, 2026 05:33 AM PDT
- Schedule: 3 shorts/day × 3 days
-           Times: 15:07, 17:07, 19:07
-           Long-form: Thursdays at 19:07
-================================================================
-
-  Channel: krgd vlogs
-  Shorts available: 5
-
-  Shorts Schedule (5 videos):
-  ────────────────────────────────────────────────────────────
-   1. gh011244_part001.mp4
-      Title: Gh011244 Part001 #krgdVlog #shorts
-      Publish: Fri May 29, 2026 at 03:07 PM PDT
-   2. gh011244_part002.mp4
-      Title: Gh011244 Part002 #krgdVlog #shorts
-      Publish: Fri May 29, 2026 at 05:07 PM PDT
-   ...
-
-  Channel: TKK Live & Shorts
-  Shorts available: 78
-
-  Shorts Schedule (9 videos):
-  ────────────────────────────────────────────────────────────
-   1. azure_..._part001.mp4
-      Title: Azure Insurance Project Part 1 Part001 #TKK #shorts
-      Publish: Fri May 29, 2026 at 03:07 PM PDT
-   ...
-================================================================
-```
-
-### Configuration
-
-Edit the constants at the top of `schedule_uploads.py` to adjust:
-
-```python
-LOCAL_TZ = ZoneInfo("America/Los_Angeles")  # Your timezone
-SHORTS_PER_DAY = 3                          # Shorts per day
-SHORTS_DAYS = 3                             # Number of days to schedule
-SHORTS_TIMES = [(15, 7), (17, 7), (19, 7)]  # Upload times (hour, minute)
-LONGFORM_DAY = 3                            # 0=Mon, 3=Thu, 6=Sun
-LONGFORM_TIME = (19, 7)                     # Long-form upload time
-CHANNELS_TO_SCHEDULE = ["krgd_vlogs", "tkk_live_shorts"]
-```
+This is the only supported scheduled-upload workflow documented in this README.
 
 ---
 ---
@@ -724,7 +660,7 @@ python3 -m app.main upload output/krgd_vlogs/trip_01_beach_part001.mp4 \
     --channel krgd_vlogs --title "Epic Beach Adventure"
 
 # Schedule multiple uploads (uses channel's daily upload times for 7 days)
-# Default: 4 videos/day at 1:07 PM, 3:06 PM, 5:07 PM, 9:07 PM UTC
+# Default: 4 videos/day at 1:07 PM, 3:07 PM, 5:07 PM, 9:07 PM UTC
 python3 -m app.main schedule output/krgd_vlogs/ --channel krgd_vlogs
 
 # Or use custom hourly interval (e.g., every 24 hours)
@@ -732,6 +668,9 @@ python3 -m app.main schedule output/krgd_vlogs/ --channel krgd_vlogs --interval 
 
 # Execute all scheduled uploads (runs pending uploads, continues from last if re-run on day 6-7)
 python3 -m app.main execute-schedule
+
+# Uploaded files are moved to output/krgd_vlogs/uploaded/
+# Upload records are written to temp/upload_history.json
 ```
 
 ---
@@ -748,6 +687,12 @@ ls output/krgd_vlogs/
 # trip_01_beach_part001.json   ← Metadata (score, timestamps, transcript)
 # trip_01_beach_part002.mp4
 # ...
+
+# Successfully uploaded videos are moved here:
+ls output/krgd_vlogs/uploaded/
+
+# Upload history is tracked here:
+cat temp/upload_history.json
 ```
 
 ---
@@ -975,11 +920,14 @@ python3 -m app.main watch --channel krgd_vlogs --fast
 python3 -m app.main upload output\krgd_vlogs\trip_01_beach_part001.mp4 `
     --channel krgd_vlogs --title "Epic Beach Adventure"
 
-# Schedule multiple uploads (one per day)
-python3 -m app.main schedule output\krgd_vlogs\ --channel krgd_vlogs --interval 24
+# Schedule multiple uploads (uses channel's daily upload times for 7 days)
+python3 -m app.main schedule output\krgd_vlogs\ --channel krgd_vlogs
 
 # Execute all scheduled uploads
 python3 -m app.main execute-schedule
+
+# Uploaded files are moved to output\krgd_vlogs\uploaded\
+# Upload records are written to temp\upload_history.json
 ```
 
 ---
@@ -996,6 +944,12 @@ dir output\krgd_vlogs\
 # trip_01_beach_part001.json   ← Metadata (score, timestamps, transcript)
 # trip_01_beach_part002.mp4
 # ...
+
+# Successfully uploaded videos are moved here:
+dir output\krgd_vlogs\uploaded\
+
+# Upload history is tracked here:
+type temp\upload_history.json
 ```
 
 ---
@@ -1124,9 +1078,10 @@ This file is created **automatically** the first time you run an upload command.
 
 For each channel, you need a separate `client_secret` file (referenced in `configs/channels.yaml`):
 ```
-configs/client_secret_krgd.json       ← for krgd_vlogs
-configs/client_secret_tkk.json        ← for techie_krishna_kayaking & tkk_live_shorts
-configs/client_secret_kk.json         ← for krishna_kayaking
+configs/client_secret_krgd_vlogs.json                ← for krgd_vlogs
+configs/client_secret_techie_krishna_kayaking.json   ← for techie_krishna_kayaking
+configs/client_secret_tkk.json                       ← for tkk_live_shorts
+configs/client_secret_krishna_kayaking.json          ← for krishna_kayaking
 ```
 
 Each one can be from the same Google Cloud project (just one OAuth client) or different projects.
@@ -1278,8 +1233,8 @@ channels:
       - "adventure"
     upload_enabled: false                 # Enable YouTube upload
     youtube:
-      client_secrets: "configs/client_secret_krgd.json"
-      credentials: "configs/credentials_krgd.json"
+      client_secrets: "configs/client_secret_krgd_vlogs.json"
+      credentials: "configs/credentials_krgd_vlogs.json"
       default_tags: ["vlog", "gopro", "travel", "adventure"]
       default_category: "19"              # YouTube category ID
       privacy_status: "private"           # private | unlisted | public
@@ -1301,8 +1256,8 @@ channels:
       - "secret"
     upload_enabled: false
     youtube:
-      client_secrets: "configs/client_secret_tkk.json"
-      credentials: "configs/credentials_tkk.json"
+      client_secrets: "configs/client_secret_techie_krishna_kayaking.json"
+      credentials: "configs/credentials_techie_krishna_kayaking.json"
       default_tags: ["tutorial", "tech", "kayaking"]
       default_category: "28"
       privacy_status: "private"
@@ -1333,7 +1288,10 @@ output/
 │   ├── trip_01_gopro_beach_part001.ass     ← Styled ASS subtitles
 │   ├── trip_01_gopro_beach_part001.json    ← Metadata & transcript
 │   ├── trip_01_gopro_beach_part002.mp4
-│   └── trip_02_drone_flight_part001.mp4
+│   ├── trip_02_drone_flight_part001.mp4
+│   └── uploaded/                            ← Successfully uploaded videos moved here
+│       ├── trip_01_gopro_beach_part001.mp4
+│       └── trip_01_gopro_beach_part002.mp4
 ├── techie_krishna_kayaking/
 │   ├── python_tips_part001.mp4
 │   └── python_tips_part001.json
@@ -1344,6 +1302,8 @@ output/
 Naming pattern: `<subfolder>_<videoname>_part<NNN>.mp4`
 
 (If the video is directly in the channel's input folder with no subfolder, the name is just `<videoname>_part<NNN>.mp4`)
+
+Upload history file: `temp/upload_history.json`
 
 ---
 
@@ -1372,6 +1332,8 @@ Naming pattern: `<subfolder>_<videoname>_part<NNN>.mp4`
 - **Caption generation** (SRT & ASS with word-level karaoke styling)
 - **GPU acceleration** (NVIDIA NVENC / Apple MPS)
 - **YouTube upload** with OAuth2, scheduling, multi-channel support
+- **Upload history tracking** in `temp/upload_history.json` for successful scheduled uploads
+- **Automatic archive after upload** moves successfully uploaded videos to `output/<channel>/uploaded/`
 - **Folder watcher** for automatic processing
 - **Batch processing** for large video libraries
 - **Docker support** with GPU passthrough
@@ -1521,6 +1483,10 @@ Set `gpu_enabled: false` in `configs/app.yaml` → uses CPU encoding (slower but
 1. Delete `configs/credentials_*.json`
 2. Re-run upload command
 3. Complete OAuth flow in browser
+
+### Uploaded video not found in output root
+After successful `execute-schedule`, videos are moved to `output/<channel>/uploaded/`.
+Check `temp/upload_history.json` for the final moved path and YouTube URL.
 
 ### Virtual environment not active
 If you see `ModuleNotFoundError`, you forgot to activate the venv:
