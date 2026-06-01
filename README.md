@@ -185,16 +185,16 @@ assets/social/                   ← Per-channel socials overlays
 
 ```bash
 # MAIN COMMAND 1: List all configured channels
-python -m app.main channels
+python3 -m app.main channels
 
 # MAIN COMMAND 2: Fast batch-all (quick runs/testing)
-python -m app.main batch-all --fast --max-clips 1008
+python3 -m app.main batch-all --fast --max-clips 1008
 
 # MAIN COMMAND 3: Quality batch-all (final runs)
-python -m app.main batch-all --max-clips 1008
+python3 -m app.main batch-all --max-clips 1008
 
 # MAIN COMMAND 4: Upload one rendered video
-python -m app.main upload output/krgd_vlogs/example_part001.mp4 --channel krgd_vlogs
+python3 -m app.main upload output/krgd_vlogs/example_part001.mp4 --channel krgd_vlogs
 ```
 
 Fast vs non-fast:
@@ -206,37 +206,37 @@ Fast vs non-fast:
 
 ```bash
 # Process a mixed-media vlog folder (phone videos + photos + action cam clips)
-python -m app.main vlog input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs
+python3 -m app.main vlog input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs
 
 # Backward-compatible alias for vlog command
-python -m app.main trip input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs
+python3 -m app.main trip input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs
 
 # Refresh trending audio manifests from configured provider
-python -m app.main refresh-trending-audio --limit 50
+python3 -m app.main refresh-trending-audio --limit 50
 
 # Process a single channel (auto-generates long-form for gopro channels)
-python -m app.main batch --channel krgd_vlogs --fast --max-clips 3
+python3 -m app.main batch --channel krgd_vlogs --fast --max-clips 3
 
 # Generate ONLY long-form videos (no shorts)
-python -m app.main longform --channel krgd_vlogs
+python3 -m app.main longform --channel krgd_vlogs
 
 # Long-form for a specific subfolder only
-python -m app.main longform --channel krgd_vlogs --subfolder 2026-05-14
+python3 -m app.main longform --channel krgd_vlogs --subfolder 2026-05-14
 
 # Long-form without social watermark
-python -m app.main longform --channel krgd_vlogs --no-overlay
+python3 -m app.main longform --channel krgd_vlogs --no-overlay
 
 # Process a single video for a channel
-python -m app.main process input/krgd_vlogs/trip_01/beach.mp4 --channel krgd_vlogs
+python3 -m app.main process input/krgd_vlogs/trip_01/beach.mp4 --channel krgd_vlogs
 
 # Batch with explicit directory
-python -m app.main batch input/tutorials/ --channel techie_krishna_kayaking
+python3 -m app.main batch input/tutorials/ --channel techie_krishna_kayaking
 
 # Watch a channel's input folder for new videos
-python -m app.main watch --channel krgd_vlogs --fast
+python3 -m app.main watch --channel krgd_vlogs --fast
 
 # Fast mode: uses tiny Whisper model + MPS GPU, ~2x faster
-python -m app.main process video.mp4 --channel krgd_vlogs --fast
+python3 -m app.main process video.mp4 --channel krgd_vlogs --fast
 ```
 
 ### Mixed-Media Vlog Workflow (Phone + Photos + GoPro)
@@ -259,10 +259,10 @@ Run:
 
 ```bash
 # End-to-end workflow for any vlog folder
-python -m app.main vlog input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs
+python3 -m app.main vlog input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs
 
 # Skip upload while testing renders/exports
-python -m app.main vlog input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs --no-upload
+python3 -m app.main vlog input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs --no-upload
 ```
 
 Notes:
@@ -313,17 +313,17 @@ output/krgd_vlogs/
 
 ```bash
 # Generate long-form videos only (standalone)
-python -m app.main longform --channel krgd_vlogs
+python3 -m app.main longform --channel krgd_vlogs
 
 # Process a specific subfolder
-python -m app.main longform --channel krgd_vlogs --subfolder 2026-05-14
+python3 -m app.main longform --channel krgd_vlogs --subfolder 2026-05-14
 
 # Skip the social watermark overlay
-python -m app.main longform --channel krgd_vlogs --no-overlay
+python3 -m app.main longform --channel krgd_vlogs --no-overlay
 
 # batch and batch-all auto-trigger long-form for gopro channels
-python -m app.main batch --channel krgd_vlogs --fast --max-clips 3
-python -m app.main batch-all --fast --max-clips 3
+python3 -m app.main batch --channel krgd_vlogs --fast --max-clips 3
+python3 -m app.main batch-all --fast --max-clips 3
 ```
 
 ### Processing Report
@@ -595,33 +595,33 @@ Nested folders like `trip_01/` are supported — the subfolder name is prefixed 
 source .venv/bin/activate
 
 # List all configured channels and video counts
-python -m app.main channels
+python3 -m app.main channels
 
 # ⚡ Process ALL channels at once (easiest — just put videos in folders and run)
-python -m app.main batch-all --fast --max-clips 3
+python3 -m app.main batch-all --fast --max-clips 3
 
 # Process a single channel only
-python -m app.main batch --channel krgd_vlogs --fast --max-clips 3
+python3 -m app.main batch --channel krgd_vlogs --fast --max-clips 3
 
 # Process a single video (specify channel for output routing)
-python -m app.main process input/krgd_vlogs/trip_01/beach.mp4 --channel krgd_vlogs --fast
+python3 -m app.main process input/krgd_vlogs/trip_01/beach.mp4 --channel krgd_vlogs --fast
 
 # Check video info first (no processing)
-python -m app.main info input/krgd_vlogs/trip_01/beach.mp4
+python3 -m app.main info input/krgd_vlogs/trip_01/beach.mp4
 
 # Watch mode — auto-process new videos dropped into channel folder
-python -m app.main watch --channel krgd_vlogs --fast
+python3 -m app.main watch --channel krgd_vlogs --fast
 # Press Ctrl+C to stop
 
 # Upload a generated short (requires YouTube API setup — see below)
-python -m app.main upload output/krgd_vlogs/trip_01_beach_part001.mp4 \
+python3 -m app.main upload output/krgd_vlogs/trip_01_beach_part001.mp4 \
     --channel krgd_vlogs --title "Epic Beach Adventure"
 
 # Schedule multiple uploads (one per day)
-python -m app.main schedule output/krgd_vlogs/ --channel krgd_vlogs --interval 24
+python3 -m app.main schedule output/krgd_vlogs/ --channel krgd_vlogs --interval 24
 
 # Execute all scheduled uploads
-python -m app.main execute-schedule
+python3 -m app.main execute-schedule
 ```
 
 ---
@@ -650,8 +650,8 @@ cd tkk-try && python3 -m venv .venv && source .venv/bin/activate
 pip install --upgrade pip && pip install -r requirements.txt && pip install torch torchaudio
 curl -L "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Bold.ttf" -o assets/fonts/Montserrat-Bold.ttf
 cp ~/Downloads/my_gopro.mp4 input/krgd_vlogs/trip_01/
-python -m app.main channels
-python -m app.main batch-all --fast --max-clips 3
+python3 -m app.main channels
+python3 -m app.main batch-all --fast --max-clips 3
 ```
 
 ---
@@ -843,33 +843,33 @@ Nested folders like `trip_01\` are supported — the subfolder name is prefixed 
 .venv\Scripts\Activate.ps1
 
 # List all configured channels and video counts
-python -m app.main channels
+python3 -m app.main channels
 
 # ⚡ Process ALL channels at once (easiest — just put videos in folders and run)
-python -m app.main batch-all --fast --max-clips 3
+python3 -m app.main batch-all --fast --max-clips 3
 
 # Process a single channel only
-python -m app.main batch --channel krgd_vlogs --fast --max-clips 3
+python3 -m app.main batch --channel krgd_vlogs --fast --max-clips 3
 
 # Process a single video
-python -m app.main process input\krgd_vlogs\trip_01\beach.mp4 --channel krgd_vlogs --fast
+python3 -m app.main process input\krgd_vlogs\trip_01\beach.mp4 --channel krgd_vlogs --fast
 
 # Check video info first (no processing)
-python -m app.main info input\krgd_vlogs\trip_01\beach.mp4
+python3 -m app.main info input\krgd_vlogs\trip_01\beach.mp4
 
 # Watch mode — auto-process new videos dropped into channel folder
-python -m app.main watch --channel krgd_vlogs --fast
+python3 -m app.main watch --channel krgd_vlogs --fast
 # Press Ctrl+C to stop
 
 # Upload a generated short (requires YouTube API setup — see below)
-python -m app.main upload output\krgd_vlogs\trip_01_beach_part001.mp4 `
+python3 -m app.main upload output\krgd_vlogs\trip_01_beach_part001.mp4 `
     --channel krgd_vlogs --title "Epic Beach Adventure"
 
 # Schedule multiple uploads (one per day)
-python -m app.main schedule output\krgd_vlogs\ --channel krgd_vlogs --interval 24
+python3 -m app.main schedule output\krgd_vlogs\ --channel krgd_vlogs --interval 24
 
 # Execute all scheduled uploads
-python -m app.main execute-schedule
+python3 -m app.main execute-schedule
 ```
 
 ---
@@ -904,8 +904,8 @@ pip install -r requirements.txt
 pip install torch torchaudio
 Invoke-WebRequest -Uri "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Bold.ttf" -OutFile "assets\fonts\Montserrat-Bold.ttf"
 Copy-Item "$HOME\Downloads\my_gopro.mp4" -Destination "input\krgd_vlogs\trip_01\"
-python -m app.main channels
-python -m app.main batch-all --fast --max-clips 3
+python3 -m app.main channels
+python3 -m app.main batch-all --fast --max-clips 3
 ```
 
 ---
@@ -982,7 +982,7 @@ This is the OAuth client identity file. You get it from Google Cloud Console.
 This file is created **automatically** the first time you run an upload command. You never write this file yourself.
 
 **What happens:**
-1. You run: `python -m app.main upload output/clip.mp4 --channel tech_channel`
+1. You run: `python3 -m app.main upload output/clip.mp4 --channel tech_channel`
 2. A browser window opens → Google login page
 3. You sign in with your YouTube account
 4. You click "Allow" to grant upload permission
@@ -1128,7 +1128,7 @@ trip:
 Refresh manifests manually:
 
 ```bash
-python -m app.main refresh-trending-audio --limit 50
+python3 -m app.main refresh-trending-audio --limit 50
 ```
 
 Manifests consumed by exports:
@@ -1424,7 +1424,7 @@ source .venv/bin/activate
 
 - Check provider settings in `configs/app.yaml` under `trip.trending_provider`
 - If using `pixabay_audio`, ensure `PIXABAY_API_KEY` is exported in your shell
-- Run `python -m app.main refresh-trending-audio --limit 20` and verify manifests are updated
+- Run `python3 -m app.main refresh-trending-audio --limit 20` and verify manifests are updated
 
 ### MPS / Apple Silicon issues
 - Whisper word-level timestamps require CPU (float64 not supported on MPS)
