@@ -193,8 +193,20 @@ python3 -m app.main batch-all --fast --max-clips 1008
 # MAIN COMMAND 3: Quality batch-all (final runs)
 python3 -m app.main batch-all --max-clips 1008
 
-# MAIN COMMAND 4: Upload one rendered video
-python3 -m app.main upload output/krgd_vlogs/example_part001.mp4 --channel krgd_vlogs
+# Render clips
+python3 -m app.main batch --channel tkk_live_shorts --max-clips 108
+python3 -m app.main batch --channel techie_krishna_kayaking --max-clips 108
+python3 -m app.main batch --channel krgd_vlogs --max-clips 108
+python3 -m app.main batch --channel krishna_kayaking --max-clips 108
+
+# Schedule uploads
+python3 -m app.main schedule output/tkk_live_shorts/ --channel tkk_live_shorts
+python3 -m app.main schedule output/techie_krishna_kayaking/ --channel techie_krishna_kayaking
+python3 -m app.main schedule output/krgd_vlogs/ --channel krgd_vlogs
+python3 -m app.main schedule output/krishna_kayaking/ --channel krishna_kayaking
+
+# Execute all pending scheduled uploads
+python3 -m app.main execute-schedule
 ```
 
 Fast vs non-fast:
@@ -270,6 +282,100 @@ Notes:
 - Photos are inserted into the timeline with optional Ken Burns motion.
 - Mixed orientations preserve content with background padding (no stretch).
 - Cleanup runs only when all YouTube uploads succeed.
+
+---
+
+## 🚀 Automated YouTube Upload Features
+
+When uploading videos to YouTube, the framework automatically handles several tasks without manual intervention:
+
+### Auto-Upload Captions
+
+- If a `.srt` (SRT subtitle) file exists alongside the video, it's automatically uploaded as English captions
+- Captions appear instantly on YouTube without manual steps
+- Sidecar `.srt` files are generated during the rendering process (step 3 in the pipeline)
+
+**Configuration:**
+```yaml
+youtube:
+  auto_upload_captions: true   # Enable auto-upload of SRT captions
+```
+
+### Monetization & Content Settings
+
+For monetized channels, the framework automatically applies:
+
+- **Monetization**: Enable ad monetization on the video (if channel is monetization-eligible)
+- **Made for Kids**: Mark videos as made-for-kids or not (affects ad policies)
+- **License Type**: Set the license to "youtube" (standard) or "creativeCommon"
+
+**Configuration:**
+```yaml
+youtube:
+  monetization_enabled: true      # Enable ads on this video
+  made_for_kids: false            # Video is NOT made for kids
+  license_type: "youtube"         # youtube or creativeCommon
+```
+
+**Important Notes:**
+- Your YouTube channel must be part of the YouTube Partner Program to earn ad revenue (manual approval required)
+- These settings are applied automatically during upload but cannot override YouTube's overall channel eligibility
+- "Made for Kids" designation has strict FTC compliance requirements—set accurately
+
+**Example:**
+```yaml
+techie_krishna_kayaking:
+  upload_enabled: true
+  youtube:
+    auto_upload_captions: true
+    monetization_enabled: true
+    made_for_kids: false
+    license_type: "youtube"
+```
+
+### Scheduled Batch Uploads (7-Day Spread)
+
+Upload multiple videos automatically over 7 days at specific times per day:
+
+**Default Schedule:** 4 videos/day at **1:07 PM, 3:07 PM, 5:07 PM, 9:07 PM UTC**
+
+**How It Works:**
+
+1. Schedule videos with a single command
+2. Videos are queued with precise publish times based on your channel's daily schedule
+3. Run `execute-schedule` to upload all pending videos at their scheduled times
+4. If you run `schedule` again on day 6-7, it automatically continues from where the last upload left off
+
+**Example: Upload 8 videos across 2 days**
+
+```bash
+# Schedule 8 videos for tkk_live_shorts (automatically spreads across days)
+# First 4 upload today at 1:07 PM, 3:07 PM, 5:07 PM, 9:07 PM
+# Next 4 upload tomorrow at the same times
+python3 -m app.main schedule output/tkk_live_shorts/ --channel tkk_live_shorts
+
+# Execute uploads when ready (runs at each scheduled time)
+python3 -m app.main execute-schedule
+```
+
+**Configuration:**
+
+```yaml
+youtube:
+  schedule_times:           # Daily upload times (HH:MM format, UTC)
+    - "13:07"              # 1:07 PM
+    - "15:07"              # 3:07 PM
+    - "17:07"              # 5:07 PM
+    - "21:07"              # 9:07 PM
+  schedule_duration_days: 7  # Max 7 days before stopping
+```
+
+**Smart Continuation:**
+
+If you run `schedule` on day 6-7 of an ongoing schedule:
+- The system detects the last upload time from the existing schedule
+- New videos continue immediately after (no gap)
+- Example: Last upload was 2026-06-07 21:07, next new video schedules for 2026-06-08 13:07
 
 ---
 
@@ -617,10 +723,14 @@ python3 -m app.main watch --channel krgd_vlogs --fast
 python3 -m app.main upload output/krgd_vlogs/trip_01_beach_part001.mp4 \
     --channel krgd_vlogs --title "Epic Beach Adventure"
 
-# Schedule multiple uploads (one per day)
+# Schedule multiple uploads (uses channel's daily upload times for 7 days)
+# Default: 4 videos/day at 1:07 PM, 3:06 PM, 5:07 PM, 9:07 PM UTC
+python3 -m app.main schedule output/krgd_vlogs/ --channel krgd_vlogs
+
+# Or use custom hourly interval (e.g., every 24 hours)
 python3 -m app.main schedule output/krgd_vlogs/ --channel krgd_vlogs --interval 24
 
-# Execute all scheduled uploads
+# Execute all scheduled uploads (runs pending uploads, continues from last if re-run on day 6-7)
 python3 -m app.main execute-schedule
 ```
 
@@ -1196,7 +1306,17 @@ channels:
       default_tags: ["tutorial", "tech", "kayaking"]
       default_category: "28"
       privacy_status: "private"
-      schedule_delay_hours: 24
+      schedule_delay_hours: 24             # Fallback interval if use_daily_times=False
+      schedule_times:                      # Daily upload times (HH:MM format, UTC)
+        - "13:07"                          # 1:07 PM
+        - "15:07"                          # 3:07 PM
+        - "17:07"                          # 5:07 PM
+        - "21:07"                          # 9:07 PM
+      schedule_duration_days: 7            # Max scheduling window (days)
+      auto_upload_captions: true           # Auto-upload SRT captions after upload
+      monetization_enabled: true           # Enable monetization on videos
+      made_for_kids: false                 # Content is NOT made for kids
+      license_type: "youtube"              # youtube | creativeCommon
 ```
 
 ---

@@ -50,10 +50,10 @@ channels:
       - "important"
       - "trick"
       - "hack"
-    upload_enabled: false
+    upload_enabled: true
     youtube:
-      client_secrets: "configs/client_secret_tkk.json"
-      credentials: "configs/credentials_tkk.json"
+      client_secrets: "configs/client_secret_techie_krishna_kayaking.json"
+      credentials: "configs/credentials_techie_krishna_kayaking.json"
       default_tags:
         - "tutorial"
         - "tech"
@@ -61,6 +61,16 @@ channels:
       default_category: "28"
       privacy_status: "private"
       schedule_delay_hours: 24
+      schedule_times:
+        - "13:07"
+        - "15:07"
+        - "17:07"
+        - "21:07"
+      schedule_duration_days: 7
+      auto_upload_captions: true
+      monetization_enabled: true
+      made_for_kids: false
+      license_type: "youtube"
 
   krishna_kayaking:
     name: "Krishna kayaking"
@@ -75,10 +85,10 @@ channels:
       - "river"
       - "rapids"
       - "adventure"
-    upload_enabled: false
+    upload_enabled: true
     youtube:
-      client_secrets: "configs/client_secret_kk.json"
-      credentials: "configs/credentials_kk.json"
+      client_secrets: "configs/client_secret_krishna_kayaking.json"
+      credentials: "configs/credentials_krishna_kayaking.json"
       default_tags:
         - "kayaking"
         - "adventure"
@@ -111,3 +121,9 @@ channels:
       default_category: "28"
       privacy_status: "private"
       schedule_delay_hours: 12
+      schedule_times:
+        - "13:07"
+        - "15:07"
+        - "17:07"
+        - "21:07"
+      schedule_duration_days: 7

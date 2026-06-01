@@ -208,6 +208,15 @@ class YouTubeUploader:
             if thumbnail_path and thumbnail_path.exists():
                 self._set_thumbnail(video_id, thumbnail_path)
 
+            # Auto-upload SRT captions if they exist
+            srt_path = video_path.with_suffix(".srt")
+            if srt_path.exists():
+                self._upload_caption(video_id, srt_path)
+
+            # Apply monetization settings
+            if self.channel_config:
+                self._apply_monetization(video_id, self.channel_config.youtube)
+
             logger.info("upload_complete", video_id=video_id, url=url)
             return UploadResult(
                 video_id=video_id,
@@ -265,6 +274,80 @@ class YouTubeUploader:
             return True
         except Exception as e:
             logger.warning("thumbnail_failed", error=str(e))
+            return False
+
+    def _upload_caption(self, video_id: str, caption_path: Path) -> bool:
+        """Upload SRT caption file to YouTube video."""
+        try:
+            if not caption_path.exists():
+                logger.warning("caption_not_found", path=str(caption_path))
+                return False
+
+            # Read SRT file
+            srt_content = caption_path.read_text(encoding="utf-8")
+
+            # Insert caption track (English, auto-generated flag)
+            body = {
+                "snippet": {
+                    "videoId": video_id,
+                    "language": "en",
+                    "name": "English",
+                    "isCC": False,
+                    "isLarge": False,
+                    "isEasyReader": False,
+                    "isDraft": False,
+                    "isAutoSynced": False,
+                }
+            }
+
+            # Upload caption file
+            request = self.service.captions().insert(
+                part="snippet",
+                body=body,
+                media_body=MediaFileUpload(
+                    str(caption_path),
+                    mimetype="text/plain",
+                ),
+            )
+
+            response = request.execute()
+            logger.info("caption_uploaded", video_id=video_id, caption_id=response.get("id"))
+            return True
+        except Exception as e:
+            logger.warning("caption_upload_failed", video_id=video_id, error=str(e))
+            return False
+
+    def _apply_monetization(self, video_id: str, yt_config) -> bool:
+        """Apply monetization and content settings to the video."""
+        try:
+            # Update video's monetizationDetails and contentDetails
+            body = {
+                "status": {
+                    "selfDeclaredMadeForKids": yt_config.made_for_kids,
+                },
+                "contentDetails": {
+                    "license": yt_config.license_type,
+                },
+                "monetizationDetails": {
+                    "accessibleForAdvertisement": yt_config.monetization_enabled,
+                }
+            }
+
+            request = self.service.videos().update(
+                part="status,contentDetails,monetizationDetails",
+                body={"id": video_id, **body},
+            )
+
+            response = request.execute()
+            logger.info(
+                "monetization_applied",
+                video_id=video_id,
+                monetization=yt_config.monetization_enabled,
+                made_for_kids=yt_config.made_for_kids,
+            )
+            return True
+        except Exception as e:
+            logger.warning("monetization_apply_failed", video_id=video_id, error=str(e))
             return False
 
     def upload_batch(
