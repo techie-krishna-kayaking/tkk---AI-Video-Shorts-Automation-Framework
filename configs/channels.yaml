@@ -8,7 +8,7 @@
 channels:
   krgd_vlogs:
     name: "krgd vlogs"
-    type: "gopro"
+    type: "vlog"
     youtube_url: "https://www.youtube.com/@krgd_vlogs"
     input_folder: "input/krgd_vlogs"
     output_folder: "output/krgd_vlogs"

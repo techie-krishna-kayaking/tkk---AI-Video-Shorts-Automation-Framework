@@ -187,7 +187,19 @@ assets/social/                   ← Per-channel socials overlays
 # List all configured channels
 python -m app.main channels
 
-# Process ALL channels at once (shorts + long-form for gopro channels)
+# Process a mixed-media vlog folder (phone videos + photos + action cam clips)
+python -m app.main vlog input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs
+
+# Backward-compatible alias for vlog command
+python -m app.main trip input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs
+
+# Refresh trending audio manifests from configured provider
+python -m app.main refresh-trending-audio --limit 50
+
+# Process ALL channels at once (smart routing by channel type):
+# - type='vlog': long-form first + shorts from each mixed-media subfolder
+# - type='gopro': shorts from videos + auto-generated long-form per subfolder
+# - type='tutorial'|other: shorts from videos only
 python -m app.main batch-all --fast --max-clips 3
 
 # Process a single channel (auto-generates long-form for gopro channels)
@@ -214,6 +226,38 @@ python -m app.main watch --channel krgd_vlogs --fast
 # Fast mode: uses tiny Whisper model + MPS GPU, ~2x faster
 python -m app.main process video.mp4 --channel krgd_vlogs --fast
 ```
+
+### Mixed-Media Vlog Workflow (Phone + Photos + GoPro)
+
+Use this when a single folder contains mixed media from multiple devices.
+
+Pipeline:
+
+```text
+Vlog Folder (videos + photos)
+  -> Chronological long-form (metadata timestamps preferred)
+  -> Existing shorts selection/render flow
+  -> Platform exports:
+     - YouTube shorts: original audio only
+     - Instagram reels: original audio + background music mix
+  -> Optional upload + move-to-trash cleanup on successful upload only
+```
+
+Run:
+
+```bash
+# End-to-end workflow for any vlog folder
+python -m app.main vlog input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs
+
+# Skip upload while testing renders/exports
+python -m app.main vlog input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs --no-upload
+```
+
+Notes:
+
+- Photos are inserted into the timeline with optional Ken Burns motion.
+- Mixed orientations preserve content with background padding (no stretch).
+- Cleanup runs only when all YouTube uploads succeed.
 
 ---
 
@@ -1023,19 +1067,86 @@ processing:
   batch_size: 5             # Videos to process in parallel
   max_workers: 4            # Worker threads
   retry_attempts: 3         # Retries on failure
+
+trip:
+  photo_duration: 4.0       # Duration per inserted photo (seconds)
+  ken_burns_enabled: true   # Apply subtle pan/zoom on photos
+  blur_background_enabled: true  # Preserve aspect ratio with blur background
+  instagram_music_volume: 0.2    # Background music mix for Instagram export
+  trending_audio_count: 100      # Max tracks to load from manifests/provider
+  cleanup_after_upload: true     # Move generated files to trash after successful upload
+  output_width: 1920             # Long-form output width
+  output_height: 1080            # Long-form output height
+  instagram_trending_manifest: "configs/trending_audio_instagram.json"
+  youtube_trending_manifest: "configs/trending_audio_youtube.json"
+  trending_provider:
+    enabled: false               # Auto-refresh manifests before export
+    provider_type: "filesystem" # filesystem | remote_manifest | pixabay_audio
+    source_dir: "assets/audio/trending"
+    source_manifest_url: ""
+    auth_env_var: ""
+    download_dir: "assets/audio/ingested"
+    request_timeout_seconds: 30
+    pixabay_api_key_env: "PIXABAY_API_KEY"
+    pixabay_category: "music"
+    pixabay_order: "popular"
 ```
+
+### Trending Audio (Free Automation)
+
+The framework supports provider-based ingestion for Instagram background tracks.
+
+Free legal option included:
+
+- `pixabay_audio` provider (requires free Pixabay API key)
+
+Setup:
+
+```bash
+export PIXABAY_API_KEY="your_key_here"
+```
+
+```yaml
+trip:
+  trending_provider:
+    enabled: true
+    provider_type: "pixabay_audio"
+```
+
+Refresh manifests manually:
+
+```bash
+python -m app.main refresh-trending-audio --limit 50
+```
+
+Manifests consumed by exports:
+
+- `configs/trending_audio_instagram.json`
+- `configs/trending_audio_youtube.json`
+
+Important: Direct downloading of Instagram's own trending audio catalog is not documented in this project. The provider flow is designed for legal/local/licensed sources.
 
 ### Channel Configuration (`configs/channels.yaml`)
 
 Each channel maps to its own input folder, output folder, socials overlay, and YouTube credentials.
 
+#### Channel Types
+
+The `type` field determines how `batch-all` processes each channel:
+
+| Type | Workflow | Use Case |
+|------|----------|----------|
+| `vlog` | Mixed-media long-form first, then shorts from each subfolder | Phone videos + photos + action cam in same trip/event folder |
+| `gopro` | Individual video processing + auto-generated long-form per subfolder | Mostly GoPro clips, handled as separate videos initially |
+| `tutorial` | Individual video processing (shorts only) | Standalone tutorial/education videos |
+
 ```yaml
 channels:
   krgd_vlogs:
     name: "krgd vlogs"
-    type: "gopro"                         # tutorial | gopro | vertical
+    type: "vlog"                          # vlog | gopro | tutorial
     youtube_url: "https://www.youtube.com/@krgd_vlogs"
-    input_folder: "input/krgd_vlogs"      # Videos go here (subfolders OK)
+    input_folder: "input/krgd_vlogs"      # For vlog: subfolders are mixed-media trips
     output_folder: "output/krgd_vlogs"    # Flat output per channel
     socials_file: "assets/social/krgd_vlogs_socials.png"  # Branding overlay
     intro_text: ""                        # Text at top of shorts
@@ -1107,6 +1218,11 @@ Naming pattern: `<subfolder>_<videoname>_part<NNN>.mp4`
 ## Features
 
 - **Multi-channel support** with per-channel input/output folders, socials overlays, and YouTube credentials
+- **Mixed-media vlog command** (`vlog`) for phone videos + photos + action camera footage in one folder
+- **Chronological timeline merge** using metadata timestamp, then file create time, then modified time
+- **Platform exports per short**: `_yt.mp4` (original audio) and `_insta.mp4` (music-mixed)
+- **Provider-based trending audio ingestion** (`filesystem`, `remote_manifest`, `pixabay_audio`)
+- **Safe post-upload cleanup** moves generated outputs to OS trash only after successful uploads
 - **`batch-all` command** — process every video across all channels with one command
 - **Gopro letterbox mode** — white 9:16 canvas with video centered (no camera area lost), "Watch the full video on YT" text at top, socials at bottom
 - **Smart crop mode** — face-aware 16:9 → 9:16 cropping for tutorial channels
@@ -1143,6 +1259,10 @@ Naming pattern: `<subfolder>_<videoname>_part<NNN>.mp4`
 ```
 app/
 ├── main.py              # CLI entry point (Typer) — process, batch, batch-all, channels, watch, upload, schedule
+├── vlog_pipeline.py     # Generic vlog-facing API exports
+├── trip_pipeline.py     # Mixed-media long-form + platform export orchestration
+├── trending_audio_provider.py  # Provider-based audio ingestion and manifest refresh
+├── cleanup.py           # Move generated assets to OS trash after successful upload
 ├── detector.py          # Video property detection & categorization
 ├── transcriber.py       # Whisper-based speech transcription (MPS/CUDA/CPU)
 ├── silence_detector.py  # FFmpeg silence detection
@@ -1162,6 +1282,8 @@ app/
 configs/
 ├── app.yaml             # Processing settings (video, shorts, transcription, captions)
 ├── channels.yaml        # Multi-channel configuration (input/output/socials/youtube)
+├── trending_audio_instagram.json # Instagram export music manifest
+├── trending_audio_youtube.json   # YouTube export music manifest
 └── client_secret_*.json # YouTube OAuth credentials (per channel, gitignored)
 
 assets/
@@ -1285,6 +1407,12 @@ source .venv/bin/activate
 - Use `transcription.model: "tiny"` (fastest, less accurate)
 - Reduce `processing.max_workers` if running out of RAM
 - For 2+ hour videos, expect 5-15 minutes processing time on CPU
+
+### Trending audio ingestion returns 0 tracks
+
+- Check provider settings in `configs/app.yaml` under `trip.trending_provider`
+- If using `pixabay_audio`, ensure `PIXABAY_API_KEY` is exported in your shell
+- Run `python -m app.main refresh-trending-audio --limit 20` and verify manifests are updated
 
 ### MPS / Apple Silicon issues
 - Whisper word-level timestamps require CPU (float64 not supported on MPS)

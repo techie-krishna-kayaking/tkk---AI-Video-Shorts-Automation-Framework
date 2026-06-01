@@ -226,13 +226,13 @@ def schedule_channel(channel_name: str, dry_run: bool = True, history: dict | No
         print(f"  [SKIP] Output folder not found: {output_dir}")
         return
 
-    # Shorts are in the top-level output folder — skip already uploaded
-    all_shorts = sorted(output_dir.glob("*.mp4"))
+    # Shorts are in the top-level output folder — sorted by creation time, skip already uploaded
+    all_shorts = sorted(output_dir.glob("*.mp4"), key=lambda p: p.stat().st_birthtime)
     shorts = [v for v in all_shorts if not is_already_uploaded(history, channel_name, v)]
 
-    # Long-form videos are in the longform/ subfolder — skip already uploaded
+    # Long-form videos are in the longform/ subfolder — sorted by creation time, skip already uploaded
     longform_dir = output_dir / "longform"
-    all_longforms = sorted(longform_dir.glob("*.mp4")) if longform_dir.exists() else []
+    all_longforms = sorted(longform_dir.glob("*.mp4"), key=lambda p: p.stat().st_birthtime) if longform_dir.exists() else []
     longforms = [v for v in all_longforms if not is_already_uploaded(history, channel_name, v)]
 
     skipped_shorts = len(all_shorts) - len(shorts)

@@ -87,6 +87,33 @@ class AssetsConfig(BaseModel):
     overlays_dir: str = "assets/overlays"
 
 
+class TrendingProviderConfig(BaseModel):
+    enabled: bool = False
+    provider_type: str = "filesystem"  # filesystem | remote_manifest | pixabay_audio
+    source_dir: str = "assets/audio/trending"
+    source_manifest_url: str = ""
+    auth_env_var: str = ""
+    download_dir: str = "assets/audio/ingested"
+    request_timeout_seconds: int = 30
+    pixabay_api_key_env: str = "PIXABAY_API_KEY"
+    pixabay_category: str = "music"
+    pixabay_order: str = "popular"
+
+
+class TripConfig(BaseModel):
+    photo_duration: float = 4.0
+    ken_burns_enabled: bool = True
+    blur_background_enabled: bool = True
+    instagram_music_volume: float = 0.2
+    trending_audio_count: int = 100
+    cleanup_after_upload: bool = True
+    output_width: int = 1920
+    output_height: int = 1080
+    instagram_trending_manifest: str = "configs/trending_audio_instagram.json"
+    youtube_trending_manifest: str = "configs/trending_audio_youtube.json"
+    trending_provider: TrendingProviderConfig = Field(default_factory=TrendingProviderConfig)
+
+
 class YouTubeChannelConfig(BaseModel):
     client_secrets: str = ""
     credentials: str = ""
@@ -123,6 +150,7 @@ class AppConfig(BaseModel):
     output: OutputConfig = Field(default_factory=OutputConfig)
     input: InputConfig = Field(default_factory=InputConfig)
     assets: AssetsConfig = Field(default_factory=AssetsConfig)
+    trip: TripConfig = Field(default_factory=TripConfig)
     channels: dict[str, ChannelConfig] = Field(default_factory=dict)
 
 

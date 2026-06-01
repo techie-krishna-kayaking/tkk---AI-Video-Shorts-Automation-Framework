@@ -9,6 +9,7 @@ python-dotenv>=1.0.0
 ffmpeg-python>=0.2.0
 opencv-python>=4.8.0
 numpy>=1.24.0
+Pillow>=10.0.0
 
 # Scene Detection
 scenedetect[opencv]>=0.6.1
@@ -29,6 +30,7 @@ watchdog>=3.0.0
 tenacity>=8.2.0
 aiofiles>=23.0.0
 httpx>=0.25.0
+send2trash>=1.8.3
 
 # Logging
 structlog>=23.0.0

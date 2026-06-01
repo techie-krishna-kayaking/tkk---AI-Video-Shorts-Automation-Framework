@@ -75,3 +75,26 @@ assets:
   social_dir: "assets/social"
   fonts_dir: "assets/fonts"
   overlays_dir: "assets/overlays"
+
+trip:
+  photo_duration: 4.0
+  ken_burns_enabled: true
+  blur_background_enabled: true
+  instagram_music_volume: 0.2
+  trending_audio_count: 100
+  cleanup_after_upload: true
+  output_width: 1920
+  output_height: 1080
+  instagram_trending_manifest: "configs/trending_audio_instagram.json"
+  youtube_trending_manifest: "configs/trending_audio_youtube.json"
+  trending_provider:
+    enabled: false
+    provider_type: "filesystem"
+    source_dir: "assets/audio/trending"
+    source_manifest_url: ""
+    auth_env_var: ""
+    download_dir: "assets/audio/ingested"
+    request_timeout_seconds: 30
+    pixabay_api_key_env: "PIXABAY_API_KEY"
+    pixabay_category: "music"
+    pixabay_order: "popular"
