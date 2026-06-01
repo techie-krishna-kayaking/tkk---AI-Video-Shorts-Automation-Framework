@@ -31,6 +31,12 @@ channels:
       default_category: "19"
       privacy_status: "private"
       schedule_delay_hours: 48
+      schedule_times:
+        - "13:07"
+        - "15:07"
+        - "17:07"
+        - "21:07"
+      schedule_duration_days: 10
 
   techie_krishna_kayaking:
     name: "techie krishna kayaking"
@@ -66,7 +72,7 @@ channels:
         - "15:07"
         - "17:07"
         - "21:07"
-      schedule_duration_days: 7
+      schedule_duration_days: 10
       auto_upload_captions: true
       monetization_enabled: true
       made_for_kids: false
@@ -96,6 +102,12 @@ channels:
       default_category: "17"
       privacy_status: "private"
       schedule_delay_hours: 24
+      schedule_times:
+        - "13:07"
+        - "15:07"
+        - "17:07"
+        - "21:07"
+      schedule_duration_days: 10
 
   tkk_live_shorts:
     name: "TKK Live & Shorts"
@@ -126,4 +138,4 @@ channels:
         - "15:07"
         - "17:07"
         - "21:07"
-      schedule_duration_days: 7
+      schedule_duration_days: 10
