@@ -8,6 +8,7 @@ Usage:
     python -m app.main watch [--channel <name>]
     python -m app.main upload <video_path> [--channel <name>] [--title <title>]
     python -m app.main schedule <directory> [--channel <name>]
+    python -m app.main reset-schedule [--all]
     python -m app.main info <video_path>
 """
 
@@ -831,6 +832,39 @@ def execute_schedule() -> None:
 
     successful = sum(1 for r in results if r.success)
     rich_console.print(f"\n[bold green]Done![/bold green] {successful}/{len(results)} uploaded successfully.")
+
+
+@app.command(name="reset-schedule")
+def reset_schedule(
+    all: bool = typer.Option(
+        False,
+        "--all",
+        help="Also clear upload history (temp/upload_history.json).",
+    ),
+) -> None:
+    """Clear all scheduled uploads (and optionally upload history)."""
+    _init()
+
+    scheduler = Scheduler()
+    removed = len(scheduler.schedule.uploads)
+    scheduler.schedule.uploads = []
+    scheduler._save_schedule()
+
+    rich_console.print(
+        f"[bold green]Schedule reset complete.[/bold green] Removed {removed} scheduled upload(s)."
+    )
+
+    if all:
+        channels = scheduler.upload_history.get("channels", {})
+        history_count = 0
+        for channel_data in channels.values():
+            history_count += len(channel_data.get("uploads", []))
+
+        scheduler.upload_history = {"channels": {}}
+        scheduler._save_upload_history()
+        rich_console.print(
+            f"[bold green]Upload history cleared.[/bold green] Removed {history_count} history record(s)."
+        )
 
 
 @app.command(name="channels")

@@ -207,6 +207,12 @@ python3 -m app.main schedule output/krishna_kayaking/ --channel krishna_kayaking
 
 # Execute all pending scheduled uploads
 python3 -m app.main execute-schedule
+
+# Clear all pending scheduled uploads (keep history)
+python3 -m app.main reset-schedule
+
+# Full reset: clear schedule + upload history
+python3 -m app.main reset-schedule --all
 ```
 
 Fast vs non-fast:
