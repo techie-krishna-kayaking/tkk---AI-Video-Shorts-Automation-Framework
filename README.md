@@ -196,8 +196,9 @@ python3 -m app.main batch-all --max-clips 1008
 # Render clips
 python3 -m app.main batch --channel tkk_live_shorts --max-clips 108
 python3 -m app.main batch --channel techie_krishna_kayaking --max-clips 108
-python3 -m app.main batch --channel krgd_vlogs --max-clips 108
 python3 -m app.main batch --channel krishna_kayaking --max-clips 108
+# 1) KRGD_VLOGS (recommended): longform -> shorts, no upload
+python3 -m app.main vlog input/krgd_vlogs/<FOLDER_NAME> --channel krgd_vlogs --no-upload
 
 # Schedule uploads
 python3 -m app.main schedule output/tkk_live_shorts/ --channel tkk_live_shorts
@@ -259,21 +260,38 @@ python3 -m app.main process video.mp4 --channel krgd_vlogs --fast
 
 ### Mixed-Media Vlog Workflow (Phone + Photos + GoPro)
 
-Use this when a single folder contains mixed media from multiple devices.
+Use this when a single folder contains mixed media from multiple devices. The framework processes long-form and short-form in **parallel** for maximum efficiency.
 
-Pipeline:
+#### Pipeline Architecture
 
 ```text
 Vlog Folder (videos + photos)
-  -> Chronological long-form (metadata timestamps preferred)
-  -> Existing shorts selection/render flow
-  -> Platform exports:
-     - YouTube shorts: original audio only
-     - Instagram reels: original audio + background music mix
-  -> Optional upload + move-to-trash cleanup on successful upload only
+  |
+  +-> Discover all files by metadata timestamp
+  |
+  +-> [PARALLEL THREAD 1]              [PARALLEL THREAD 2]
+  |   Build long-form video            Process source videos -> shorts
+  |   - Chronological ordering          - Motion/scene detection
+  |   - Normalize segments              - Clip selection (min 15s)
+  |   - Apply watermark overlay         - Render with overlays
+  |   - Generate SRT + ASS captions     - Generate SRT + ASS captions
+  |   (full media duration)             (independent of long-form)
+  |
+  +-> Merge outputs
+  +-> Create platform variants (YouTube + Instagram with standard audio)
+  +-> Optional: upload + trash cleanup
 ```
 
-Run:
+#### Key Architecture Changes (v2.1+)
+
+- **Parallel Execution**: Long-form and shorts render in separate worker threads simultaneously
+- **Fast Assembly**: Long-form uses FFmpeg stream copy concat (no re-encode)
+- **Aspect Ratio Preservation**: Mixed orientations centered with soft blurred background (no stretch/crop)
+- **Watermark**: Social overlay fixed top-left, 22% width, 72% opacity throughout long-form
+- **Captions**: Auto-generated SRT + ASS for both long-form and all shorts
+- **Audio**: YouTube + Instagram variants use original audio only (trending audio workflow removed)
+
+#### Usage
 
 ```bash
 # End-to-end workflow for any vlog folder
@@ -281,13 +299,17 @@ python3 -m app.main vlog input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_
 
 # Skip upload while testing renders/exports
 python3 -m app.main vlog input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs --no-upload
+
+# Fast mode (quick testing)
+python3 -m app.main vlog input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs --no-upload --fast
 ```
 
-Notes:
+#### Technical Details
 
 - Photos are inserted into the timeline with optional Ken Burns motion.
 - Mixed orientations preserve content with background padding (no stretch).
 - Cleanup runs only when all YouTube uploads succeed.
+- Worker threads scale to available CPU cores (configurable via `config.processing.max_workers`).
 
 ---
 
@@ -391,7 +413,130 @@ If you run `schedule` on day 6-7 of an ongoing schedule:
 
 ---
 
-## 🎬 Long-form Video Generation
+## � krgd_vlogs Quick Reference
+
+For the krgd_vlogs vlog channel (GoPro action camera footage). All commands below assume you're in the `tkk-YT` directory and the virtual environment is activated.
+
+### Prerequisites
+
+```bash
+cd /Users/kkrishna/Library/CloudStorage/OneDrive-InfobloxInc/PycharmProjects/tkk-prjs/tkk-YT
+source .venv/bin/activate
+```
+
+### Essential Commands
+
+#### 1. Test One Video (1 Short)
+
+```bash
+python3 -m app.main process input/krgd_vlogs/2026-05-19/GH011251.MP4 \
+  --channel krgd_vlogs --max-clips 1 --no-upload
+```
+
+**Output:** ~1 short in `output/krgd_vlogs/`
+
+#### 2. Test Fast Mode (Quick)
+
+```bash
+python3 -m app.main process input/krgd_vlogs/2026-05-19/GH011251.MP4 \
+  --channel krgd_vlogs --max-clips 1 --no-upload --fast
+```
+
+**Output:** ~1 short (faster transcription, lower quality captions)
+
+#### 3. Full Vlog Folder → Longform + Shorts (NO UPLOAD)
+
+```bash
+python3 -m app.main vlog input/krgd_vlogs/2026-05-19 \
+  --channel krgd_vlogs --no-upload
+```
+
+**Processing Steps (PARALLEL):**
+1. Discovers all media (videos + photos) by timestamp
+2. **PARALLEL: Build long-form** (segment normalization + concat)
+3. **PARALLEL: Process source videos** → shorts (motion detection + clip selection)
+4. Generate long-form SRT + ASS captions
+5. Creates YouTube + Instagram variants (standard audio, no mixing)
+6. Outputs to `output/krgd_vlogs/`
+
+**Behavior:** Long-form and shorts render simultaneously; end-to-end time is significantly faster than sequential execution.
+
+**Output Structure:**
+```
+output/krgd_vlogs/
+├── longform/
+│   ├── 2026-05-19_vlog_longform.mp4
+│   ├── 2026-05-19_vlog_longform.srt
+│   └── 2026-05-19_vlog_longform.ass
+├── 2026-05-19_gh011251_part001.mp4
+├── 2026-05-19_gh011251_part001_yt.mp4
+├── 2026-05-19_gh011251_part001_insta.mp4
+└── [more clips...]
+```
+
+#### 4. Full Vlog Folder + Upload
+
+```bash
+python3 -m app.main vlog input/krgd_vlogs/2026-05-19 \
+  --channel krgd_vlogs
+```
+
+**Warning:** Files are moved to trash after successful upload. Test with `--no-upload` first.
+
+#### 5. Batch Process All Vlog Subfolders
+
+```bash
+python3 -m app.main batch --channel krgd_vlogs --no-upload
+```
+
+**Processes:** All nested vlog subfolders in `input/krgd_vlogs/` using parallel longform + shorts workflow (no sequential waiting).
+
+#### 6. Monitor Progress in Real Time
+
+```bash
+tail -f logs/app.log
+```
+
+**Shows:** Current step, file being processed, errors, and timing.
+
+### Naming Convention
+
+All krgd_vlogs shorts follow: `{folder}_{filename}_part{NNN}.mp4`
+
+**Example:**
+- Source: `input/krgd_vlogs/2026-05-19/GH011251.MP4`
+- Output: `2026-05-19_gh011251_part001.mp4`, `2026-05-19_gh011251_part002.mp4`, ...
+
+### Output Files
+
+For each source video, you get:
+
+- `{name}_part{NNN}.mp4` — Source short (used for captions/metadata)
+- `{name}_part{NNN}_yt.mp4` — YouTube variant (original audio)
+- `{name}_part{NNN}_insta.mp4` — Instagram variant (original audio, copy of YouTube variant)
+- `{name}_part{NNN}.json` — Metadata (timestamps, scores, transcript)
+- `{name}_part{NNN}.srt` — SRT captions (auto-burned on YouTube upload)
+- `{name}_part{NNN}.ass` — ASS captions (styled, karaoke-ready)
+
+### Troubleshooting
+
+**Long-form takes too long?**
+- Use `--fast` flag to speed up transcription (smaller Whisper model)
+- Reduce clips with `--max-clips` (affects shorts, not long-form duration)
+- Long-form runtime depends on total source media duration + worker thread count
+
+**Shorts are all 15 seconds?**
+- This is expected; min duration is configured to 15s for GoPro motion-based selection
+- You can adjust in `configs/app.yaml` under `shorts.min_duration`
+
+**Missing captions?**
+- Check `logs/app.log` for transcription errors
+- Ensure video has audio stream
+- Try with `--fast` (may have different behavior)
+
+---
+
+## �🎬 Long-form Video Generation
 
 For **gopro** channels, the framework automatically generates long-form vlog compilations in addition to short-form clips.
 

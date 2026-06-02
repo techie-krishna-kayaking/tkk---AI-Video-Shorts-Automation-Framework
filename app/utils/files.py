@@ -51,13 +51,38 @@ def get_channel_video_name(video_path: Path, channel_input_folder: str) -> str:
     If the video is directly in the channel folder (no subfolder),
     just returns the video stem.
     """
-    channel_root = Path(channel_input_folder).resolve()
-    video_resolved = video_path.resolve()
+    channel_root = Path(channel_input_folder)
 
+    relative: Path | None = None
+
+    # Primary path resolution attempt.
     try:
-        relative = video_resolved.relative_to(channel_root)
+        relative = video_path.resolve().relative_to(channel_root.resolve())
     except ValueError:
-        # Video isn't inside the channel folder, use plain name
+        # Keep fallback anchor behavior scoped to krgd_vlogs only.
+        # Other channels retain prior behavior: plain sanitized stem.
+        if "krgd_vlogs" not in channel_input_folder.lower():
+            return sanitize_filename(video_path.stem)
+
+        # Fallback for runs where cwd differs: find channel path components
+        # inside the video path and derive a relative path from that anchor.
+        channel_parts = channel_root.parts
+        video_parts = video_path.resolve().parts
+
+        anchor_idx = -1
+        max_idx = len(video_parts) - len(channel_parts)
+        for idx in range(max_idx + 1):
+            if video_parts[idx: idx + len(channel_parts)] == channel_parts:
+                anchor_idx = idx
+                break
+
+        if anchor_idx != -1:
+            rel_parts = video_parts[anchor_idx + len(channel_parts):]
+            if rel_parts:
+                relative = Path(*rel_parts)
+
+    if relative is None:
+        # Video isn't inside the configured channel folder, use plain name.
         return sanitize_filename(video_path.stem)
 
     parts = relative.parts

@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -14,7 +15,6 @@ from typing import Any
 
 from PIL import Image, ExifTags
 
-from app.trending_audio_provider import TrendingAudioProvider
 from app.utils.config import get_config
 from app.utils.files import get_video_duration, probe_video, sanitize_filename
 from app.utils.logging import get_logger
@@ -38,14 +38,6 @@ class MediaItem:
     timestamp: datetime
     timestamp_source: str
     order_index: int
-
-
-@dataclass
-class TrendingAudioTrack:
-    title: str
-    source: str  # instagram | youtube
-    path: Path
-    duration: float
 
 
 @dataclass
@@ -206,16 +198,35 @@ def _has_audio_stream(video_path: Path) -> bool:
     return any(stream.get("codec_type") == "audio" for stream in info.get("streams", []))
 
 
-def _normalize_video_segment(item: MediaItem, output_path: Path, width: int, height: int, fps: int, blur_bg: bool) -> None:
+def _normalize_video_segment(
+    item: MediaItem,
+    output_path: Path,
+    width: int,
+    height: int,
+    fps: int,
+    blur_bg: bool,
+    overlay_path: Path | None = None,
+) -> None:
     filter_complex = (
         f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase"
         + (",boxblur=40:20" if blur_bg else "")
         + f",crop={width}:{height}[bg];"
         f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease[fg];"
-        "[bg][fg]overlay=(W-w)/2:(H-h)/2[vout]"
+        "[bg][fg]overlay=(W-w)/2:(H-h)/2[vbase]"
     )
 
     cmd = ["ffmpeg", "-y", "-i", str(item.path)]
+    has_overlay = overlay_path is not None and overlay_path.exists()
+    if has_overlay:
+        cmd.extend(["-i", str(overlay_path)])
+        overlay_w = max(120, int(width * 0.22))
+        filter_complex += (
+            f";[1:v]scale={overlay_w}:-1,format=rgba,colorchannelmixer=aa=0.72[wm]"
+            f";[vbase][wm]overlay=40:40[vout]"
+        )
+    else:
+        filter_complex += ";[vbase]copy[vout]"
+
     if _has_audio_stream(item.path):
         cmd.extend([
             "-filter_complex", filter_complex,
@@ -246,7 +257,17 @@ def _normalize_video_segment(item: MediaItem, output_path: Path, width: int, hei
     subprocess.run(cmd, check=True, capture_output=True, text=True)
 
 
-def _normalize_photo_segment(item: MediaItem, output_path: Path, width: int, height: int, fps: int, duration: float, blur_bg: bool, ken_burns_enabled: bool) -> None:
+def _normalize_photo_segment(
+    item: MediaItem,
+    output_path: Path,
+    width: int,
+    height: int,
+    fps: int,
+    duration: float,
+    blur_bg: bool,
+    ken_burns_enabled: bool,
+    overlay_path: Path | None = None,
+) -> None:
     if ken_burns_enabled:
         overlay_expr = (
             "overlay="
@@ -261,7 +282,7 @@ def _normalize_photo_segment(item: MediaItem, output_path: Path, width: int, hei
         + (",boxblur=40:20" if blur_bg else "")
         + f",crop={width}:{height}[bg];"
         f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease[fg];"
-        f"[bg][fg]{overlay_expr}[vout]"
+        f"[bg][fg]{overlay_expr}[vbase]"
     )
 
     cmd = [
@@ -273,6 +294,20 @@ def _normalize_photo_segment(item: MediaItem, output_path: Path, width: int, hei
         "-f", "lavfi",
         "-t", str(duration),
         "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+    ]
+
+    has_overlay = overlay_path is not None and overlay_path.exists()
+    if has_overlay:
+        cmd.extend(["-i", str(overlay_path)])
+        overlay_w = max(120, int(width * 0.22))
+        filter_complex += (
+            f";[2:v]scale={overlay_w}:-1,format=rgba,colorchannelmixer=aa=0.72[wm]"
+            f";[vbase][wm]overlay=40:40[vout]"
+        )
+    else:
+        filter_complex += ";[vbase]copy[vout]"
+
+    cmd.extend([
         "-filter_complex", filter_complex,
         "-map", "[vout]",
         "-map", "1:a",
@@ -285,12 +320,16 @@ def _normalize_photo_segment(item: MediaItem, output_path: Path, width: int, hei
         "-shortest",
         "-movflags", "+faststart",
         str(output_path),
-    ]
+    ])
 
     subprocess.run(cmd, check=True, capture_output=True, text=True)
 
 
-def create_trip_longform(trip_folder: Path, output_path: Path) -> TripLongformResult:
+def create_trip_longform(
+    trip_folder: Path,
+    output_path: Path,
+    overlay_path: Path | None = None,
+) -> TripLongformResult:
     config = get_config()
     timeline = discover_trip_media(trip_folder)
 
@@ -306,54 +345,73 @@ def create_trip_longform(trip_folder: Path, output_path: Path) -> TripLongformRe
     tmp_root = Path(tempfile.gettempdir()) / f"trip_timeline_{os.getpid()}_{sanitize_filename(trip_folder.name)}"
     tmp_root.mkdir(parents=True, exist_ok=True)
 
-    segment_files: list[Path] = []
+    segment_files: dict[int, Path] = {}
     errors: list[str] = []
 
+    max_workers = max(1, int(getattr(config.processing, "max_workers", 4)))
+
+    def _render_segment(idx: int, item: MediaItem) -> tuple[int, Path | None, str | None]:
+        segment_path = tmp_root / f"segment_{idx:04d}.mp4"
+        logger.info(
+            "trip_longform_add_media",
+            order=idx,
+            file=str(item.path),
+            kind=item.kind,
+            timestamp=item.timestamp.isoformat(sep=" "),
+        )
+
+        try:
+            if item.kind == "video":
+                _normalize_video_segment(
+                    item=item,
+                    output_path=segment_path,
+                    width=width,
+                    height=height,
+                    fps=fps,
+                    blur_bg=config.trip.blur_background_enabled,
+                    overlay_path=overlay_path,
+                )
+            else:
+                _normalize_photo_segment(
+                    item=item,
+                    output_path=segment_path,
+                    width=width,
+                    height=height,
+                    fps=fps,
+                    duration=max(0.5, float(config.trip.photo_duration)),
+                    blur_bg=config.trip.blur_background_enabled,
+                    ken_burns_enabled=config.trip.ken_burns_enabled,
+                    overlay_path=overlay_path,
+                )
+            return idx, segment_path, None
+        except subprocess.CalledProcessError as exc:
+            logger.error("trip_longform_segment_failed", file=str(item.path), error=str(exc))
+            err = f"{item.path.name}: {exc.stderr[-300:] if exc.stderr else str(exc)}"
+            return idx, None, err
+
     try:
-        for idx, item in enumerate(timeline, 1):
-            segment_path = tmp_root / f"segment_{idx:04d}.mp4"
-            logger.info(
-                "trip_longform_add_media",
-                order=idx,
-                file=str(item.path),
-                kind=item.kind,
-                timestamp=item.timestamp.isoformat(sep=" "),
-            )
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_map = {
+                executor.submit(_render_segment, idx, item): idx
+                for idx, item in enumerate(timeline, 1)
+            }
 
-            try:
-                if item.kind == "video":
-                    _normalize_video_segment(
-                        item=item,
-                        output_path=segment_path,
-                        width=width,
-                        height=height,
-                        fps=fps,
-                        blur_bg=config.trip.blur_background_enabled,
-                    )
-                else:
-                    _normalize_photo_segment(
-                        item=item,
-                        output_path=segment_path,
-                        width=width,
-                        height=height,
-                        fps=fps,
-                        duration=max(0.5, float(config.trip.photo_duration)),
-                        blur_bg=config.trip.blur_background_enabled,
-                        ken_burns_enabled=config.trip.ken_burns_enabled,
-                    )
-            except subprocess.CalledProcessError as exc:
-                errors.append(f"{item.path.name}: {exc.stderr[-300:] if exc.stderr else str(exc)}")
-                logger.error("trip_longform_segment_failed", file=str(item.path), error=str(exc))
-                continue
-
-            segment_files.append(segment_path)
+            for future in as_completed(future_map):
+                idx, segment_path, err = future.result()
+                if err:
+                    errors.append(err)
+                    continue
+                if segment_path:
+                    segment_files[idx] = segment_path
 
         if not segment_files:
             return TripLongformResult(output_path=output_path, timeline=timeline, success=False, errors=errors or ["No media segments were rendered"])
 
+        ordered_segments = [segment_files[idx] for idx in sorted(segment_files)]
+
         concat_file = tmp_root / "concat.txt"
         with open(concat_file, "w", encoding="utf-8") as handle:
-            for segment in segment_files:
+            for segment in ordered_segments:
                 safe_path = str(segment.resolve()).replace("'", "'\\''")
                 handle.write(f"file '{safe_path}'\n")
 
@@ -363,11 +421,7 @@ def create_trip_longform(trip_folder: Path, output_path: Path) -> TripLongformRe
             "-f", "concat",
             "-safe", "0",
             "-i", str(concat_file),
-            "-c:v", "libx264",
-            "-preset", "medium",
-            "-crf", "18",
-            "-c:a", "aac",
-            "-b:a", "192k",
+            "-c", "copy",
             "-movflags", "+faststart",
             str(output_path),
         ]
@@ -390,71 +444,17 @@ def create_trip_longform(trip_folder: Path, output_path: Path) -> TripLongformRe
         shutil.rmtree(tmp_root, ignore_errors=True)
 
 
-def create_vlog_longform(vlog_folder: Path, output_path: Path) -> VlogLongformResult:
+def create_vlog_longform(
+    vlog_folder: Path,
+    output_path: Path,
+    overlay_path: Path | None = None,
+) -> VlogLongformResult:
     """Create chronological long-form video from mixed vlog media."""
-    return create_trip_longform(trip_folder=vlog_folder, output_path=output_path)
-
-
-def _load_audio_manifest(manifest_path: Path, source: str, limit: int) -> list[dict[str, Any]]:
-    if not manifest_path.exists():
-        return []
-
-    try:
-        raw = json.loads(manifest_path.read_text())
-    except Exception as exc:
-        logger.warning("trending_manifest_invalid", source=source, file=str(manifest_path), error=str(exc))
-        return []
-
-    tracks = raw.get("tracks", []) if isinstance(raw, dict) else raw
-    if not isinstance(tracks, list):
-        return []
-
-    resolved: list[dict[str, Any]] = []
-    for track in tracks[: max(1, limit)]:
-        if not isinstance(track, dict):
-            continue
-        path = track.get("path")
-        if not path:
-            continue
-        track_path = Path(path)
-        if not track_path.is_absolute():
-            track_path = (manifest_path.parent / track_path).resolve()
-        if not track_path.exists():
-            continue
-        title = str(track.get("title") or track_path.stem)
-        resolved.append({"title": title, "source": source, "path": track_path})
-
-    return resolved
-
-
-def discover_trending_audio(limit: int) -> list[TrendingAudioTrack]:
-    config = get_config()
-
-    instagram_manifest = Path(config.trip.instagram_trending_manifest)
-    youtube_manifest = Path(config.trip.youtube_trending_manifest)
-
-    candidates: list[dict[str, Any]] = []
-    candidates.extend(_load_audio_manifest(instagram_manifest, "instagram", limit))
-
-    if len(candidates) < limit:
-        candidates.extend(_load_audio_manifest(youtube_manifest, "youtube", limit - len(candidates)))
-
-    tracks: list[TrendingAudioTrack] = []
-    for candidate in candidates[: max(1, limit)]:
-        duration = get_video_duration(candidate["path"])
-        if duration <= 0:
-            continue
-        tracks.append(
-            TrendingAudioTrack(
-                title=candidate["title"],
-                source=candidate["source"],
-                path=candidate["path"],
-                duration=duration,
-            )
-        )
-
-    logger.info("trending_audio_discovered", total=len(tracks), sources=list({t.source for t in tracks}))
-    return tracks
+    return create_trip_longform(
+        trip_folder=vlog_folder,
+        output_path=output_path,
+        overlay_path=overlay_path,
+    )
 
 
 def _copy_as_platform_variant(source: Path, suffix: str) -> Path:
@@ -463,89 +463,20 @@ def _copy_as_platform_variant(source: Path, suffix: str) -> Path:
     return destination
 
 
-def _mix_trending_audio(clip_path: Path, output_path: Path, track: TrendingAudioTrack, track_start: float, music_volume: float) -> None:
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i", str(clip_path),
-        "-stream_loop", "-1",
-        "-ss", f"{max(0.0, track_start):.2f}",
-        "-i", str(track.path),
-        "-filter_complex",
-        f"[1:a]volume={music_volume}[bg];[0:a][bg]amix=inputs=2:duration=first:dropout_transition=2[aout]",
-        "-map", "0:v",
-        "-map", "[aout]",
-        "-c:v", "copy",
-        "-c:a", "aac",
-        "-b:a", "192k",
-        "-shortest",
-        str(output_path),
-    ]
-    subprocess.run(cmd, check=True, capture_output=True, text=True)
-
-
 def create_platform_exports(short_clips: list[Path], output_dir: Path) -> PlatformExportResult:
-    config = get_config()
-
     output_dir.mkdir(parents=True, exist_ok=True)
 
     yt_exports: list[Path] = []
     insta_exports: list[Path] = []
     mixed_tracks: list[dict[str, Any]] = []
 
-    provider = TrendingAudioProvider()
-    if provider.is_enabled():
-        try:
-            provider.refresh(limit=max(1, config.trip.trending_audio_count))
-        except Exception as exc:
-            logger.warning("trending_provider_refresh_failed", error=str(exc))
-
-    tracks = discover_trending_audio(limit=max(1, config.trip.trending_audio_count))
-
-    for idx, short_clip in enumerate(short_clips, 1):
+    for short_clip in short_clips:
         yt_out = _copy_as_platform_variant(short_clip, "yt")
         yt_exports.append(yt_out)
 
+        # Keep Instagram variant generation without platform-specific audio mixing.
         insta_out = short_clip.with_name(f"{short_clip.stem}_insta.mp4")
-        if not tracks:
-            shutil.copy2(yt_out, insta_out)
-            insta_exports.append(insta_out)
-            continue
-
-        track = tracks[idx % len(tracks)]
-        segment_seconds = 30.0
-        segment_start = ((idx - 1) * segment_seconds) % max(track.duration, segment_seconds)
-
-        try:
-            _mix_trending_audio(
-                clip_path=yt_out,
-                output_path=insta_out,
-                track=track,
-                track_start=segment_start,
-                music_volume=max(0.0, min(1.0, config.trip.instagram_music_volume)),
-            )
-            mixed_tracks.append(
-                {
-                    "clip": str(insta_out),
-                    "track": track.title,
-                    "source": track.source,
-                    "segment_start": round(segment_start, 2),
-                    "segment_end": round(segment_start + segment_seconds, 2),
-                    "music_volume": config.trip.instagram_music_volume,
-                }
-            )
-            logger.info(
-                "instagram_audio_mix_applied",
-                clip=str(insta_out),
-                track=track.title,
-                source=track.source,
-                segment=f"{segment_start:.2f}-{segment_start + segment_seconds:.2f}",
-                music_volume=config.trip.instagram_music_volume,
-            )
-        except subprocess.CalledProcessError as exc:
-            logger.warning("instagram_audio_mix_failed", clip=str(insta_out), error=str(exc))
-            shutil.copy2(yt_out, insta_out)
-
+        shutil.copy2(yt_out, insta_out)
         insta_exports.append(insta_out)
 
     logger.info(

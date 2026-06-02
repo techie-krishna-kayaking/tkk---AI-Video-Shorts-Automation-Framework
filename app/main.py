@@ -15,6 +15,8 @@ Usage:
 from __future__ import annotations
 
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import replace
 from pathlib import Path
 from typing import Optional
 
@@ -29,6 +31,7 @@ from app.detector import VideoCategory, detect_video
 from app.longform import LongformResult, discover_subfolders, generate_longform, sort_gopro_chronological
 from app.renderer import Renderer
 from app.scheduler import Scheduler
+from app.transcriber import Transcriber
 from app.uploader import YouTubeUploader
 from app.utils.config import get_config, load_config
 from app.utils.files import (
@@ -42,7 +45,7 @@ from app.utils.files import (
 )
 from app.utils.logging import console as rich_console, create_progress, get_logger, setup_logging
 from app.trending_audio_provider import TrendingAudioProvider
-from app.vlog_pipeline import create_platform_exports, create_vlog_longform
+from app.vlog_pipeline import create_platform_exports, create_vlog_longform, discover_vlog_media
 
 app = typer.Typer(
     name="shorts-ai",
@@ -99,6 +102,26 @@ def process(
     # Step 1: Detect video properties
     rich_console.print("\n[bold]Step 1:[/bold] Analyzing video...")
     video_info = detect_video(video_path)
+
+    # Prefer channel-configured type over path/aspect-ratio heuristics.
+    # Treat vlog channels as gopro for clip-selection/render behavior.
+    category_map = {
+        "tutorial": VideoCategory.TUTORIAL,
+        "vertical": VideoCategory.VERTICAL,
+        "gopro": VideoCategory.GOPRO,
+        "vlog": VideoCategory.GOPRO,
+    }
+    if ch_config and ch_config.type in category_map:
+        configured_category = category_map[ch_config.type]
+        if video_info.category != configured_category:
+            logger.info(
+                "video_category_overridden",
+                detected=video_info.category.value,
+                configured=configured_category.value,
+                channel=channel,
+                path=str(video_path),
+            )
+            video_info = replace(video_info, category=configured_category)
 
     rich_console.print(f"  Resolution: {video_info.width}x{video_info.height}")
     rich_console.print(f"  Duration: {video_info.duration:.1f}s ({video_info.duration / 60:.1f} min)")
@@ -157,13 +180,18 @@ def process(
         if socials:
             overlay_path = Path(socials)
         hook_text = ch_config.intro_text
-        channel_type = ch_config.type
+        # Renderer currently supports tutorial/gopro layouts; map vlog -> gopro.
+        channel_type = "gopro" if ch_config.type == "vlog" else ch_config.type
+
+    max_workers = max(1, int(getattr(config.processing, "max_workers", 4)))
 
     with create_progress() as progress:
         task = progress.add_task("Rendering clips...", total=len(selection.clips))
-        results = []
-        for idx, clip in enumerate(selection.clips):
-            result = renderer.render_clips(
+        results_map: dict[int, list] = {}
+
+        def _render_single(idx: int, clip):
+            local_renderer = Renderer()
+            return local_renderer.render_clips(
                 video_path=video_path,
                 clips=[clip],
                 video_info=video_info,
@@ -173,8 +201,21 @@ def process(
                 hook_text=hook_text,
                 channel_type=channel_type,
             )
-            results.extend(result)
-            progress.advance(task)
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_map = {
+                executor.submit(_render_single, idx, clip): idx
+                for idx, clip in enumerate(selection.clips)
+            }
+
+            for future in as_completed(future_map):
+                idx = future_map[future]
+                results_map[idx] = future.result()
+                progress.advance(task)
+
+        results = []
+        for idx in range(len(selection.clips)):
+            results.extend(results_map.get(idx, []))
 
     # Summary
     successful = sum(1 for r in results if r.success)
@@ -208,10 +249,11 @@ def _run_vlog_workflow(
 ) -> None:
     """
     Full vlog workflow:
-    1) Build chronological long-form video from mixed media in a folder.
-    2) Generate shorts from that long-form output.
-    3) Export platform variants: YouTube (original audio), Instagram (trending audio at configurable volume).
-    4) Upload YouTube exports and move generated files to trash only after successful upload.
+    1) Discover timeline metadata for mixed media.
+    2) Start long-form generation and short-form generation in parallel.
+    3) Generate long-form captions when long-form is ready.
+    4) Export platform variants using standard audio workflow.
+    5) Upload YouTube exports and move generated files to trash only after successful upload.
     """
     _init()
     config = get_config()
@@ -233,15 +275,72 @@ def _run_vlog_workflow(
     longform_name = f"{sanitize_filename(vlog_folder.name)}_vlog_longform.mp4"
     longform_path = longform_dir / longform_name
 
+    longform_overlay_path: Path | None = None
+    socials = ch_config.socials_file or ch_config.social_footer
+    if socials:
+        candidate = Path(socials)
+        if candidate.exists():
+            longform_overlay_path = candidate
+
     rich_console.print("\n[bold cyan]Vlog Workflow[/bold cyan]")
     rich_console.print(f"  Vlog folder: {vlog_folder}")
     rich_console.print(f"  Channel:     {ch_config.name} ({channel})")
     rich_console.print(f"  Long-form:   {longform_path}")
     rich_console.print("=" * 60)
 
-    # Step 1: Mixed-media chronological long-form generation
-    rich_console.print("\n[bold]Step 1:[/bold] Building vlog timeline and long-form video...")
-    longform_result = create_vlog_longform(vlog_folder=vlog_folder, output_path=longform_path)
+    # Discover timeline metadata once; use it for both long-form and short-form flows.
+    timeline_items = discover_vlog_media(vlog_folder)
+    if not timeline_items:
+        rich_console.print("[bold red]No media files found in vlog folder.[/bold red]")
+        raise typer.Exit(1)
+
+    source_videos = [item.path for item in timeline_items if item.kind == "video"]
+    if not source_videos:
+        rich_console.print("[bold red]No video files found for shorts generation.[/bold red]")
+        raise typer.Exit(1)
+
+    rich_console.print(f"\n[bold]Step 1:[/bold] Timeline discovered ({len(timeline_items)} items)")
+    rich_console.print(f"  Videos for shorts: {len(source_videos)}")
+
+    # Step 2: Run long-form and short-form pipelines independently in parallel.
+    rich_console.print("\n[bold]Step 2:[/bold] Running long-form and short-form pipelines in parallel...")
+
+    def _build_longform():
+        return create_vlog_longform(
+            vlog_folder=vlog_folder,
+            output_path=longform_path,
+            overlay_path=longform_overlay_path,
+        )
+
+    def _process_source_video(video_path: Path) -> list[Path]:
+        return process(
+            video_path=video_path,
+            channel=channel,
+            max_clips=max_clips,
+            fast=fast,
+            no_captions=False,
+            no_upload=True,
+        )
+
+    short_clips: list[Path] = []
+    short_errors = 0
+    max_workers = max(1, int(getattr(config.processing, "max_workers", 4)))
+
+    with ThreadPoolExecutor(max_workers=max_workers + 1) as executor:
+        longform_future = executor.submit(_build_longform)
+        short_futures = [
+            executor.submit(_process_source_video, video_path)
+            for video_path in source_videos
+        ]
+
+        for future in as_completed(short_futures):
+            try:
+                short_clips.extend(future.result())
+            except Exception as exc:
+                short_errors += 1
+                logger.error("vlog_short_video_failed", folder=str(vlog_folder), error=str(exc))
+
+        longform_result = longform_future.result()
 
     if not longform_result.success:
         rich_console.print("[bold red]Long-form generation failed.[/bold red]")
@@ -253,36 +352,57 @@ def _run_vlog_workflow(
         f"  [green]Long-form ready:[/green] {longform_result.output_path.name} "
         f"({len(longform_result.timeline)} timeline items)"
     )
-
-    # Step 2: Use long-form as input for existing shorts workflow
-    rich_console.print("\n[bold]Step 2:[/bold] Generating shorts from long-form video...")
-    short_clips = process(
-        video_path=longform_result.output_path,
-        channel=channel,
-        max_clips=max_clips,
-        fast=fast,
-        no_captions=False,
-        no_upload=True,
+    rich_console.print(
+        f"  [green]Shorts from source videos:[/green] {len(short_clips)} clips"
+        + (f" ({short_errors} source video(s) failed)" if short_errors else "")
     )
 
+    # Step 3: Generate captions for long-form output
+    rich_console.print("\n[bold]Step 3:[/bold] Generating long-form captions...")
+    try:
+        longform_transcriber = Transcriber(
+            model_name=("tiny" if fast else None),
+            word_timestamps=not fast,
+        )
+        longform_transcription = longform_transcriber.transcribe(longform_result.output_path)
+
+        longform_caption_base = longform_result.output_path.with_suffix("")
+        longform_caption_gen = CaptionGenerator()
+        srt_path = longform_caption_gen.generate_srt(
+            longform_transcription,
+            longform_caption_base,
+        )
+        ass_path = longform_caption_gen.generate_ass(
+            longform_transcription,
+            longform_caption_base,
+            video_width=config.trip.output_width,
+            video_height=config.trip.output_height,
+        )
+        rich_console.print(f"  Captions: {srt_path.name}, {ass_path.name}")
+    except Exception as exc:
+        logger.warning(
+            "longform_caption_generation_failed",
+            channel=channel,
+            longform=str(longform_result.output_path),
+            error=str(exc),
+        )
+        rich_console.print(f"  [yellow]Long-form captions skipped:[/yellow] {exc}")
+
     if not short_clips:
-        rich_console.print("[yellow]No shorts generated from long-form output.[/yellow]")
+        rich_console.print("[yellow]No shorts generated from source videos.[/yellow]")
         raise typer.Exit(0)
 
-    # Step 3: Platform-specific exports
-    rich_console.print("\n[bold]Step 3:[/bold] Creating YouTube + Instagram platform exports...")
+    # Step 4: Platform-specific exports
+    rich_console.print("\n[bold]Step 4:[/bold] Creating platform exports...")
     exports = create_platform_exports(short_clips=short_clips, output_dir=output_dir)
 
     rich_console.print(f"  YouTube exports:   {len(exports.youtube_exports)}")
     rich_console.print(f"  Instagram exports: {len(exports.instagram_exports)}")
 
     if exports.mixed_tracks:
-        rich_console.print("  Trending audio mix details:")
+        rich_console.print("  Audio mix details:")
         for item in exports.mixed_tracks:
-            rich_console.print(
-                f"    - {Path(item['clip']).name}: {item['track']} ({item['source']}) "
-                f"{item['segment_start']}-{item['segment_end']}s @ vol {item['music_volume']}"
-            )
+            rich_console.print(f"    - {Path(item['clip']).name}")
 
     logger.info(
         "vlog_shorts_generation_complete",
@@ -292,7 +412,7 @@ def _run_vlog_workflow(
         output=str(output_dir),
     )
 
-    # Step 4: Optional upload + cleanup
+    # Step 5: Optional upload + cleanup
     if no_upload:
         rich_console.print("\n[bold yellow]Upload skipped due to --no-upload.[/bold yellow]")
         return
@@ -301,7 +421,7 @@ def _run_vlog_workflow(
         rich_console.print("\n[bold yellow]Upload skipped (upload_enabled=false for channel).[/bold yellow]")
         return
 
-    rich_console.print("\n[bold]Step 4:[/bold] Uploading YouTube exports...")
+    rich_console.print("\n[bold]Step 5:[/bold] Uploading YouTube exports...")
     logger.info("upload_started", channel=channel, count=len(exports.youtube_exports))
 
     uploader = YouTubeUploader(channel)
@@ -330,7 +450,7 @@ def _run_vlog_workflow(
         rich_console.print(f"  [green]Uploaded:[/green] {success_count}/{len(upload_results)}")
 
         if config.trip.cleanup_after_upload:
-            rich_console.print("\n[bold]Step 5:[/bold] Moving generated files to trash...")
+            rich_console.print("\n[bold]Step 6:[/bold] Moving generated files to trash...")
             generated_files = [
                 longform_result.output_path,
                 *exports.source_shorts,
@@ -442,6 +562,46 @@ def batch(
             rich_console.print(f"[bold red]Channel not found: {channel}[/bold red]")
             rich_console.print(f"  Available: {', '.join(config.channels.keys())}")
             raise typer.Exit(1)
+
+        # For vlog channels, batch mode must be longform-first, then shorts.
+        if ch_config.type == "vlog":
+            input_path = Path(ch_config.input_folder)
+            subfolders = sorted([d for d in input_path.iterdir() if d.is_dir()]) if input_path.exists() else []
+
+            if not subfolders:
+                rich_console.print(f"[yellow]No vlog subfolders found in {ch_config.input_folder}/[/yellow]")
+                raise typer.Exit(0)
+
+            rich_console.print(f"\n[bold cyan]Channel:[/bold cyan] {ch_config.name}")
+            rich_console.print(f"[bold cyan]Input:[/bold cyan]   {ch_config.input_folder}/")
+            rich_console.print(f"[bold cyan]Output:[/bold cyan]  {ch_config.output_folder}/")
+            rich_console.print(f"[bold cyan]Mode:[/bold cyan]    vlog longform -> shorts")
+            rich_console.print(f"[bold cyan]Folders:[/bold cyan] {len(subfolders)} found")
+            rich_console.print("=" * 60)
+
+            success_count = 0
+            fail_count = 0
+            for idx, subfolder in enumerate(subfolders, 1):
+                rich_console.print(f"\n[bold]({idx}/{len(subfolders)})[/bold] {subfolder.name}")
+                try:
+                    _run_vlog_workflow(
+                        vlog_folder=subfolder,
+                        channel=channel,
+                        max_clips=max_clips,
+                        fast=fast,
+                        no_upload=True,
+                    )
+                    success_count += 1
+                except SystemExit:
+                    pass
+                except Exception as e:
+                    rich_console.print(f"  [red]Error: {e}[/red]")
+                    logger.error("batch_vlog_failed", channel=channel, folder=str(subfolder), error=str(e))
+                    fail_count += 1
+
+            rich_console.print(f"\n[bold green]Batch complete![/bold green]")
+            rich_console.print(f"  Vlog folders — Processed: {success_count} | Failed: {fail_count}")
+            return
 
         videos = discover_channel_videos(ch_config.input_folder, ext_list)
         if not videos:
