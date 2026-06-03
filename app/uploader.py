@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,9 +19,13 @@ from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+SCOPES = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.force-ssl",
+]
 API_SERVICE_NAME = "youtube"
 API_VERSION = "v3"
+YOUTUBE_TITLE_MAX_LEN = 100
 
 RETRIABLE_STATUS_CODES = [500, 502, 503, 504]
 MAX_RETRIES = 10
@@ -80,6 +85,14 @@ class YouTubeUploader:
                 credentials = Credentials.from_authorized_user_file(
                     str(credentials_path), SCOPES
                 )
+                granted_scopes = set(credentials.scopes or [])
+                if not set(SCOPES).issubset(granted_scopes):
+                    logger.info(
+                        "credentials_scope_upgrade_required",
+                        path=str(credentials_path),
+                        missing_scopes=sorted(set(SCOPES) - granted_scopes),
+                    )
+                    credentials = None
                 if credentials.valid:
                     logger.info("credentials_loaded", path=str(credentials_path))
                 else:
@@ -145,11 +158,15 @@ class YouTubeUploader:
         if not video_path.exists():
             return UploadResult(
                 video_id="",
-                title=title,
+                title=self._normalize_title(title, video_path.stem),
                 url="",
                 success=False,
                 error=f"Video file not found: {video_path}",
             )
+
+        safe_title = self._normalize_title(title, video_path.stem)
+        if safe_title != title:
+            logger.info("title_normalized", original=title, normalized=safe_title)
 
         # Apply channel defaults
         if self.channel_config:
@@ -161,7 +178,7 @@ class YouTubeUploader:
 
         body: dict[str, Any] = {
             "snippet": {
-                "title": title,
+                "title": safe_title,
                 "description": description,
                 "tags": tags or [],
                 "categoryId": category_id,
@@ -180,7 +197,7 @@ class YouTubeUploader:
         logger.info(
             "uploading_video",
             path=str(video_path),
-            title=title,
+            title=safe_title,
             privacy=privacy_status,
         )
 
@@ -220,18 +237,33 @@ class YouTubeUploader:
             logger.info("upload_complete", video_id=video_id, url=url)
             return UploadResult(
                 video_id=video_id,
-                title=title,
+                title=safe_title,
                 url=url,
                 success=True,
             )
 
         return UploadResult(
             video_id="",
-            title=title,
+            title=safe_title,
             url="",
             success=False,
             error="Upload failed after retries",
         )
+
+    def _normalize_title(self, title: str, fallback_stem: str = "") -> str:
+        """Return a safe YouTube title (non-empty, no control chars, <=100 chars)."""
+        safe = (title or "").strip()
+        if not safe:
+            safe = fallback_stem.replace("_", " ").strip()
+
+        # Keep the title readable while removing characters that can break API validation.
+        safe = "".join(ch for ch in safe if ch >= " " and ch != "\x7f")
+        safe = re.sub(r"\s+", " ", safe).strip()
+
+        if len(safe) > YOUTUBE_TITLE_MAX_LEN:
+            safe = safe[:YOUTUBE_TITLE_MAX_LEN].rstrip()
+
+        return safe or "Untitled Video"
 
     def _resumable_upload(self, request) -> dict[str, Any] | None:
         """Execute resumable upload with exponential backoff retry."""

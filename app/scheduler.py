@@ -366,12 +366,16 @@ class Scheduler:
         title = ' '.join(word.capitalize() for word in title.split())
         return title
 
-    def execute_pending(self) -> list[UploadResult]:
-        """Execute all pending scheduled uploads."""
+    def execute_pending(self, channel_name: str | None = None) -> list[UploadResult]:
+        """Execute pending scheduled uploads, optionally filtered by channel."""
         config = get_config()
         results: list[UploadResult] = []
 
-        pending = [u for u in self.schedule.uploads if u.status == "pending"]
+        pending = [
+            u
+            for u in self.schedule.uploads
+            if u.status == "pending" and (channel_name is None or u.channel_name == channel_name)
+        ]
         if not pending:
             logger.info("no_pending_uploads")
             return results
@@ -420,9 +424,45 @@ class Scheduler:
 
         return results
 
-    def get_pending_count(self) -> int:
-        """Get number of pending uploads."""
-        return sum(1 for u in self.schedule.uploads if u.status == "pending")
+    def get_pending_count(self, channel_name: str | None = None) -> int:
+        """Get number of pending uploads, optionally filtered by channel."""
+        return sum(
+            1
+            for u in self.schedule.uploads
+            if u.status == "pending" and (channel_name is None or u.channel_name == channel_name)
+        )
+
+    def requeue_failed(self, channel_name: str | None = None) -> tuple[int, int]:
+        """
+        Requeue failed uploads by changing status from failed -> pending.
+
+        Returns:
+            tuple(requeued_count, missing_file_count)
+        """
+        requeued = 0
+        missing = 0
+
+        for upload in self.schedule.uploads:
+            if upload.status != "failed":
+                continue
+            if channel_name is not None and upload.channel_name != channel_name:
+                continue
+
+            if upload.video_path.exists():
+                upload.status = "pending"
+                requeued += 1
+            else:
+                missing += 1
+                logger.warning(
+                    "failed_upload_source_missing",
+                    path=str(upload.video_path),
+                    channel=upload.channel_name,
+                )
+
+        if requeued:
+            self._save_schedule()
+
+        return requeued, missing
 
     def clear_completed(self) -> int:
         """Remove completed uploads from schedule."""

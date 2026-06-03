@@ -8,6 +8,7 @@ Usage:
     python -m app.main watch [--channel <name>]
     python -m app.main upload <video_path> [--channel <name>] [--title <title>]
     python -m app.main schedule <directory> [--channel <name>]
+    python -m app.main retry-failed [--channel <name>] [--run-now]
     python -m app.main reset-schedule [--all]
     python -m app.main info <video_path>
 """
@@ -994,6 +995,47 @@ def execute_schedule() -> None:
     rich_console.print(f"[bold]Executing {pending} pending uploads...[/bold]")
     results = scheduler.execute_pending()
 
+    successful = sum(1 for r in results if r.success)
+    rich_console.print(f"\n[bold green]Done![/bold green] {successful}/{len(results)} uploaded successfully.")
+
+
+@app.command(name="retry-failed")
+def retry_failed(
+    channel: Optional[str] = typer.Option(None, "--channel", "-c", help="Retry failed uploads for one channel only."),
+    run_now: bool = typer.Option(False, "--run-now", help="Immediately execute the requeued uploads."),
+) -> None:
+    """Requeue failed uploads and optionally execute them now."""
+    _init()
+
+    scheduler = Scheduler()
+    requeued, missing = scheduler.requeue_failed(channel_name=channel)
+
+    if requeued == 0:
+        scope = f" for channel '{channel}'" if channel else ""
+        rich_console.print(f"[yellow]No failed uploads to requeue{scope}.[/yellow]")
+        if missing:
+            rich_console.print(f"[yellow]Skipped {missing} failed upload(s) with missing source files.[/yellow]")
+        if not run_now:
+            raise typer.Exit(0)
+
+    if requeued:
+        rich_console.print(f"[bold green]Requeued {requeued} failed upload(s).[/bold green]")
+    if missing:
+        rich_console.print(f"[yellow]Skipped {missing} failed upload(s) with missing source files.[/yellow]")
+
+    if not run_now:
+        pending = scheduler.get_pending_count(channel_name=channel)
+        rich_console.print(f"[bold]Pending now:[/bold] {pending}")
+        rich_console.print("Run [bold]python3 -m app.main execute-schedule[/bold] to upload them.")
+        return
+
+    pending = scheduler.get_pending_count(channel_name=channel)
+    if pending == 0:
+        rich_console.print("[yellow]No pending uploads after requeue.[/yellow]")
+        raise typer.Exit(0)
+
+    rich_console.print(f"[bold]Executing {pending} pending upload(s)...[/bold]")
+    results = scheduler.execute_pending(channel_name=channel)
     successful = sum(1 for r in results if r.success)
     rich_console.print(f"\n[bold green]Done![/bold green] {successful}/{len(results)} uploaded successfully.")
 
