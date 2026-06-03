@@ -470,6 +470,7 @@ class Renderer:
         clips: list[Clip],
         video_info: VideoInfo,
         output_dir: Path,
+        output_name: str | None = None,
         subtitle_paths: dict[int, Path] | None = None,
         overlay_path: Path | None = None,
         hook_text: str = "",
@@ -483,13 +484,14 @@ class Renderer:
             clips: List of clips to render.
             video_info: Video metadata.
             output_dir: Output directory for rendered clips.
+            output_name: Optional base output name (channel-aware naming).
             subtitle_paths: Map of clip index to subtitle file path.
             overlay_path: Social footer overlay image.
             hook_text: Default hook text for top overlay.
             channel_type: Channel type (tutorial/gopro) - affects rendering layout.
         """
         results: list[RenderResult] = []
-        video_name = sanitize_filename(video_path.stem)
+        video_name = sanitize_filename(output_name) if output_name else sanitize_filename(video_path.stem)
         start_number = get_next_part_number(output_dir, video_name)
 
         # Compute crop for landscape videos (only for tutorial mode)

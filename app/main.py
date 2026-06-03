@@ -73,6 +73,7 @@ def process(
     fast: bool = typer.Option(False, "--fast", "-f", help="Fast mode: use tiny model, skip word timestamps."),
     no_captions: bool = typer.Option(False, "--no-captions", help="Skip caption generation."),
     no_upload: bool = typer.Option(False, "--no-upload", help="Skip upload even if enabled."),
+    render_workers: Optional[int] = None,
 ) -> list[Path]:
     """Process a single video and generate shorts/reels."""
     _init()
@@ -183,7 +184,7 @@ def process(
         # Renderer currently supports tutorial/gopro layouts; map vlog -> gopro.
         channel_type = "gopro" if ch_config.type == "vlog" else ch_config.type
 
-    max_workers = max(1, int(getattr(config.processing, "max_workers", 4)))
+    max_workers = max(1, int(render_workers) if render_workers else int(getattr(config.processing, "max_workers", 4)))
 
     with create_progress() as progress:
         task = progress.add_task("Rendering clips...", total=len(selection.clips))
@@ -196,6 +197,7 @@ def process(
                 clips=[clip],
                 video_info=video_info,
                 output_dir=output_dir,
+                output_name=video_name,
                 subtitle_paths={0: subtitle_paths[idx]} if idx in subtitle_paths else None,
                 overlay_path=overlay_path,
                 hook_text=hook_text,
@@ -320,13 +322,15 @@ def _run_vlog_workflow(
             fast=fast,
             no_captions=False,
             no_upload=True,
+            render_workers=1,
         )
 
     short_clips: list[Path] = []
     short_errors = 0
     max_workers = max(1, int(getattr(config.processing, "max_workers", 4)))
+    short_workers = max(1, min(max_workers, 2))
 
-    with ThreadPoolExecutor(max_workers=max_workers + 1) as executor:
+    with ThreadPoolExecutor(max_workers=short_workers + 1) as executor:
         longform_future = executor.submit(_build_longform)
         short_futures = [
             executor.submit(_process_source_video, video_path)

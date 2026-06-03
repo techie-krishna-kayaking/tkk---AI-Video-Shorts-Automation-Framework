@@ -4,10 +4,12 @@
 
 **Automatically transform long-form videos into viral YouTube Shorts, Instagram Reels & TikTok clips**
 
-[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
-[![FFmpeg](https://img.shields.io/badge/FFmpeg-007808?style=flat-square&logo=ffmpeg&logoColor=white)](https://ffmpeg.org)
-[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
-[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square&logo=docker&logoColor=white)](https://docker.com)
+<p align="center">
+  <a href="https://python.org"><img alt="Python" src="https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white" /></a>
+  <a href="https://ffmpeg.org"><img alt="FFmpeg" src="https://img.shields.io/badge/FFmpeg-007808?style=flat-square&logo=ffmpeg&logoColor=white" /></a>
+  <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/License-MIT-green?style=flat-square" /></a>
+  <a href="https://docker.com"><img alt="Docker" src="https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square&logo=docker&logoColor=white" /></a>
+</p>
 
 </div>
 
@@ -76,11 +78,14 @@
 
 <div align="center">
 
+
 ### 📤 Export Platforms
 
-[![YouTube Shorts](https://img.shields.io/badge/YouTube_Shorts-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://youtube.com/shorts)&nbsp;
-[![Instagram Reels](https://img.shields.io/badge/Instagram_Reels-E4405F?style=for-the-badge&logo=instagram&logoColor=white)](https://instagram.com)&nbsp;
-[![TikTok](https://img.shields.io/badge/TikTok-000000?style=for-the-badge&logo=tiktok&logoColor=white)](https://tiktok.com)
+<p align="center">
+  <a href="https://youtube.com/shorts"><img alt="YouTube Shorts" src="https://img.shields.io/badge/YouTube_Shorts-FF0000?style=for-the-badge&logo=youtube&logoColor=white" /></a>
+  <a href="https://instagram.com"><img alt="Instagram Reels" src="https://img.shields.io/badge/Instagram_Reels-E4405F?style=for-the-badge&logo=instagram&logoColor=white" /></a>
+  <a href="https://tiktok.com"><img alt="TikTok" src="https://img.shields.io/badge/TikTok-000000?style=for-the-badge&logo=tiktok&logoColor=white" /></a>
+</p>
 
 </div>
 
@@ -88,15 +93,16 @@
 
 ### ⚡ Powered By
 
-![Whisper](https://img.shields.io/badge/OpenAI_Whisper-Speech_to_Text-412991?style=flat-square&logo=openai&logoColor=white)&nbsp;
-![SceneDetect](https://img.shields.io/badge/PySceneDetect-Scene_Analysis-FF6F00?style=flat-square&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgZmlsbD0id2hpdGUiIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTQgOGgxNnYxMUg0eiIvPjxyZWN0IHg9IjIiIHk9IjQiIHdpZHRoPSIyMCIgaGVpZ2h0PSIxNiIgcng9IjIiIGZpbGw9Im5vbmUiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMiIvPjwvc3ZnPg==&logoColor=white)&nbsp;
-![OpenCV](https://img.shields.io/badge/OpenCV-Motion_Tracking-5C3EE8?style=flat-square&logo=opencv&logoColor=white)&nbsp;
-![CUDA](https://img.shields.io/badge/NVIDIA-GPU_Accelerated-76B900?style=flat-square&logo=nvidia&logoColor=white)
-
-![Typer](https://img.shields.io/badge/Typer-CLI_Framework-000000?style=flat-square&logo=gnubash&logoColor=white)&nbsp;
-![Rich](https://img.shields.io/badge/Rich-Beautiful_Output-1E1E1E?style=flat-square&logo=windowsterminal&logoColor=white)&nbsp;
-![YAML](https://img.shields.io/badge/YAML-Configuration-CB171E?style=flat-square&logo=yaml&logoColor=white)&nbsp;
-![OAuth2](https://img.shields.io/badge/Google-OAuth2_Auth-4285F4?style=flat-square&logo=google&logoColor=white)
+<p align="center">
+  <img alt="OpenAI Whisper" src="https://img.shields.io/badge/OpenAI_Whisper-Speech_to_Text-412991?style=flat-square&logo=openai&logoColor=white" />
+  <img alt="PySceneDetect" src="https://img.shields.io/badge/PySceneDetect-Scene_Analysis-FF6F00?style=flat-square&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgZmlsbD0id2hpdGUiIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTQgOGgxNnYxMUg0eiIvPjxyZWN0IHg9IjIiIHk9IjQiIHdpZHRoPSIyMCIgaGVpZ2h0PSIxNiIgcng9IjIiIGZpbGw9Im5vbmUiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMiIvPjwvc3ZnPg==&logoColor=white" />
+  <img alt="OpenCV" src="https://img.shields.io/badge/OpenCV-Motion_Tracking-5C3EE8?style=flat-square&logo=opencv&logoColor=white" />
+  <img alt="NVIDIA" src="https://img.shields.io/badge/NVIDIA-GPU_Accelerated-76B900?style=flat-square&logo=nvidia&logoColor=white" />
+  <img alt="Typer" src="https://img.shields.io/badge/Typer-CLI_Framework-000000?style=flat-square&logo=gnubash&logoColor=white" />
+  <img alt="Rich" src="https://img.shields.io/badge/Rich-Beautiful_Output-1E1E1E?style=flat-square&logo=windowsterminal&logoColor=white" />
+  <img alt="YAML" src="https://img.shields.io/badge/YAML-Configuration-CB171E?style=flat-square&logo=yaml&logoColor=white" />
+  <img alt="Google OAuth2" src="https://img.shields.io/badge/Google-OAuth2_Auth-4285F4?style=flat-square&logo=google&logoColor=white" />
+</p>
 
 </div>
 
@@ -118,6 +124,53 @@
 
 ---
 
+### CLI Quick Reference
+
+```bash
+# Activate it (you must do this every time you open a new terminal)
+source .venv/bin/activate
+
+# MAIN COMMAND 1: List all configured channels
+python3 -m app.main channels
+
+# MAIN COMMAND 2: Fast batch-all (quick runs/testing)
+python3 -m app.main batch-all --fast --max-clips 1008
+
+# MAIN COMMAND 3: Quality batch-all (final runs)
+python3 -m app.main batch-all --max-clips 1008
+
+# Render clips
+python3 -m app.main batch --channel tkk_live_shorts --max-clips 108
+python3 -m app.main batch --channel techie_krishna_kayaking --max-clips 108
+python3 -m app.main batch --channel krishna_kayaking --max-clips 108
+
+# 1) KRGD_VLOGS (recommended): longform -> shorts, no upload
+caffeinate -dimsu python3 -m app.main vlog input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs --no-upload
+
+python3 -m app.main vlog input/krgd_vlogs/<FOLDER_NAME> --channel krgd_vlogs --no-upload
+
+# Schedule uploads
+python3 -m app.main schedule output/krishna_kayaking/ --channel krishna_kayaking
+python3 -m app.main schedule output/techie_krishna_kayaking/ --channel techie_krishna_kayaking
+python3 -m app.main schedule output/tkk_live_shorts/ --channel tkk_live_shorts
+python3 -m app.main schedule output/krgd_vlogs/ --channel krgd_vlogs
+
+# Execute all pending scheduled uploads
+python3 -m app.main execute-schedule
+
+# Clear all pending scheduled uploads (keep history)
+python3 -m app.main reset-schedule
+
+# Full reset: clear schedule + upload history
+python3 -m app.main reset-schedule --all
+```
+
+Fast vs non-fast:
+
+- Use `--fast` for speed.
+- Omit `--fast` for better transcription/caption quality.
+
+---
 ## 🎛️ Multi-Channel Architecture
 
 The framework supports **multiple YouTube channels**, each with its own input folder, output folder, socials overlay, and YouTube credentials.
@@ -184,6 +237,9 @@ assets/social/                   ← Per-channel socials overlays
 ### CLI Quick Reference
 
 ```bash
+# Activate it (you must do this every time you open a new terminal)
+source .venv/bin/activate
+
 # MAIN COMMAND 1: List all configured channels
 python3 -m app.main channels
 
@@ -197,14 +253,17 @@ python3 -m app.main batch-all --max-clips 1008
 python3 -m app.main batch --channel tkk_live_shorts --max-clips 108
 python3 -m app.main batch --channel techie_krishna_kayaking --max-clips 108
 python3 -m app.main batch --channel krishna_kayaking --max-clips 108
+
 # 1) KRGD_VLOGS (recommended): longform -> shorts, no upload
+caffeinate -dimsu python3 -m app.main vlog input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs --no-upload
+
 python3 -m app.main vlog input/krgd_vlogs/<FOLDER_NAME> --channel krgd_vlogs --no-upload
 
 # Schedule uploads
-python3 -m app.main schedule output/tkk_live_shorts/ --channel tkk_live_shorts
-python3 -m app.main schedule output/techie_krishna_kayaking/ --channel techie_krishna_kayaking
-python3 -m app.main schedule output/krgd_vlogs/ --channel krgd_vlogs
 python3 -m app.main schedule output/krishna_kayaking/ --channel krishna_kayaking
+python3 -m app.main schedule output/techie_krishna_kayaking/ --channel techie_krishna_kayaking
+python3 -m app.main schedule output/tkk_live_shorts/ --channel tkk_live_shorts
+python3 -m app.main schedule output/krgd_vlogs/ --channel krgd_vlogs
 
 # Execute all pending scheduled uploads
 python3 -m app.main execute-schedule

@@ -236,7 +236,7 @@ def _normalize_video_segment(
     else:
         cmd.extend([
             "-f", "lavfi",
-            "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+            "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
             "-filter_complex", filter_complex,
             "-map", "[vout]",
             "-map", "1:a",
@@ -250,6 +250,8 @@ def _normalize_video_segment(
         "-crf", "18",
         "-c:a", "aac",
         "-b:a", "192k",
+        "-ar", "48000",
+        "-ac", "2",
         "-movflags", "+faststart",
         str(output_path),
     ])
@@ -293,7 +295,7 @@ def _normalize_photo_segment(
         "-i", str(item.path),
         "-f", "lavfi",
         "-t", str(duration),
-        "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+        "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
     ]
 
     has_overlay = overlay_path is not None and overlay_path.exists()
@@ -317,6 +319,8 @@ def _normalize_photo_segment(
         "-crf", "18",
         "-c:a", "aac",
         "-b:a", "192k",
+        "-ar", "48000",
+        "-ac", "2",
         "-shortest",
         "-movflags", "+faststart",
         str(output_path),
@@ -425,7 +429,32 @@ def create_trip_longform(
             "-movflags", "+faststart",
             str(output_path),
         ]
-        subprocess.run(concat_cmd, check=True, capture_output=True, text=True)
+        try:
+            subprocess.run(concat_cmd, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as exc:
+            # Fallback keeps the workflow resilient if any segment-level stream params drift.
+            logger.warning(
+                "trip_longform_concat_copy_failed",
+                output=str(output_path),
+                error=exc.stderr[-300:] if exc.stderr else str(exc),
+            )
+            concat_fallback_cmd = [
+                "ffmpeg",
+                "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", str(concat_file),
+                "-c:v", "libx264",
+                "-preset", "medium",
+                "-crf", "18",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-ar", "48000",
+                "-ac", "2",
+                "-movflags", "+faststart",
+                str(output_path),
+            ]
+            subprocess.run(concat_fallback_cmd, check=True, capture_output=True, text=True)
 
         logger.info(
             "trip_longform_generated",
