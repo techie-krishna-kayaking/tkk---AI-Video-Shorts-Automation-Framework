@@ -30,8 +30,8 @@ video:
 
 shorts:
   min_duration: 15
-  max_duration: 60
-  target_duration: 45
+  max_duration: 90
+  target_duration: 60
   silence_threshold: -40
   silence_min_duration: 2.0
   overlap_seconds: 0.5
