@@ -122,6 +122,7 @@ class YouTubeChannelConfig(BaseModel):
     privacy_status: str = "private"
     schedule_delay_hours: int = 24
     schedule_times: list[str] = Field(default_factory=lambda: ["13:07", "15:07", "17:07", "21:07"])  # HH:MM format, 4x/day default
+    schedule_timezone: str = "UTC"  # IANA timezone name, e.g. Asia/Kolkata
     schedule_duration_days: int = 7
     auto_upload_captions: bool = True
     monetization_enabled: bool = False

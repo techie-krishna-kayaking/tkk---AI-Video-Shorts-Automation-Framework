@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.uploader import UploadResult, YouTubeUploader
 from app.utils.config import get_config
@@ -184,7 +185,16 @@ class Scheduler:
         """
         schedule_times = channel_config.youtube.schedule_times
         if not schedule_times:
-            schedule_times = ["13:07", "15:06", "17:07", "21:07"]
+            schedule_times = ["13:07", "15:07", "17:07", "21:07"]
+
+        tz_name = getattr(channel_config.youtube, "schedule_timezone", "UTC") or "UTC"
+        try:
+            schedule_tz = ZoneInfo(tz_name)
+        except ZoneInfoNotFoundError:
+            logger.warning("invalid_schedule_timezone", timezone=tz_name, fallback="UTC")
+            schedule_tz = timezone.utc
+
+        current_local = current_time.astimezone(schedule_tz)
 
         times = []
         for time_str in sorted(schedule_times):
@@ -193,21 +203,21 @@ class Scheduler:
 
         # Create datetime objects for today's upload times
         today_times = [
-            current_time.replace(hour=h, minute=m, second=0, microsecond=0)
+            current_local.replace(hour=h, minute=m, second=0, microsecond=0)
             for h, m in times
         ]
 
         # Find the next upload time
         for upload_time in today_times:
-            if upload_time > current_time:
-                return upload_time
+            if upload_time > current_local:
+                return upload_time.astimezone(timezone.utc)
 
         # If no time left today, use first time tomorrow
         h, m = times[0]
-        tomorrow = (current_time + timedelta(days=1)).replace(
+        tomorrow = (current_local + timedelta(days=1)).replace(
             hour=h, minute=m, second=0, microsecond=0
         )
-        return tomorrow
+        return tomorrow.astimezone(timezone.utc)
 
     def schedule_uploads(
         self,
