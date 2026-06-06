@@ -32,10 +32,13 @@ channels:
       privacy_status: "private"
       schedule_delay_hours: 48
       schedule_times:
-        - "07:37"
-        - "09:37"
-        - "11:37"
-        - "15:37"
+        - "07:07"
+        - "09:07"
+        - "11:07"
+        - "13:07"
+        - "15:07"
+        - "17:07"
+        - "21:07"
       schedule_duration_days: 10
 
   techie_krishna_kayaking:
