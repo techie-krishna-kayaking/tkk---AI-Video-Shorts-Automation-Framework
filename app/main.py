@@ -18,6 +18,7 @@ from __future__ import annotations
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -54,6 +55,95 @@ app = typer.Typer(
     rich_markup_mode="rich",
 )
 logger = get_logger(__name__)
+
+
+def _count_source_videos(folder: Path, extensions: list[str]) -> int:
+    """Count source video files in a folder recursively."""
+    return sum(
+        1
+        for f in folder.rglob("*")
+        if f.is_file() and f.suffix.lower() in extensions
+    )
+
+
+def _longform_status(longform_path: Path) -> str:
+    """Return longform integrity status: ok, corrupt, or missing."""
+    if not longform_path.exists():
+        return "missing"
+    try:
+        duration = get_video_duration(longform_path)
+    except Exception:
+        return "corrupt"
+    return "ok" if duration > 0 else "corrupt"
+
+
+def _count_raw_shorts(output_dir: Path, prefix: str) -> int:
+    """Count generated raw shorts clips for a vlog folder prefix."""
+    count = 0
+    for p in output_dir.glob(f"{prefix}_*_part*.mp4"):
+        if p.name.endswith("_yt.mp4") or p.name.endswith("_insta.mp4"):
+            continue
+        count += 1
+    return count
+
+
+def _classify_vlog_outcome(
+    folder: Path,
+    output_folder: str,
+    extensions: list[str],
+) -> dict[str, str | int]:
+    """Classify a vlog folder by output integrity and completeness."""
+    output_dir = Path(output_folder)
+    prefix = sanitize_filename(folder.name)
+    longform_path = output_dir / "longform" / f"{prefix}_vlog_longform.mp4"
+
+    input_videos = _count_source_videos(folder, extensions)
+    shorts = _count_raw_shorts(output_dir, prefix)
+    lf = _longform_status(longform_path)
+
+    if input_videos == 0:
+        outcome = "NO_SOURCE_VIDEOS"
+    elif lf == "ok" and shorts > 0:
+        outcome = "SUCCESS"
+    elif lf == "ok" and shorts == 0:
+        outcome = "PARTIAL_SHORTS_MISSING"
+    elif lf == "corrupt" and shorts > 0:
+        outcome = "PARTIAL_LONGFORM_CORRUPT"
+    elif lf == "corrupt" and shorts == 0:
+        outcome = "FAILED_LONGFORM_CORRUPT"
+    elif lf == "missing" and shorts > 0:
+        outcome = "PARTIAL_LONGFORM_MISSING"
+    else:
+        outcome = "FAILED_OR_NOT_PROCESSED"
+
+    return {
+        "folder": folder.name,
+        "prefix": prefix,
+        "input_videos": input_videos,
+        "shorts": shorts,
+        "longform": lf,
+        "outcome": outcome,
+        "rerun": f'python3 -m app.main vlog "{folder}" --channel {{channel}} --no-upload',
+    }
+
+
+def _write_vlog_summary_report(channel: str, rows: list[dict[str, str | int]]) -> Path:
+    """Write a deterministic TSV report for vlog audit/batch runs."""
+    report_dir = Path("logs") / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    report_path = report_dir / f"vlog_summary_{channel}_{ts}.tsv"
+
+    with report_path.open("w", encoding="utf-8") as f:
+        f.write("outcome\tfolder\tinput_videos\tshorts\tlongform\trerun_command\n")
+        for row in rows:
+            rerun = str(row["rerun"]).replace("{channel}", channel)
+            f.write(
+                f"{row['outcome']}\t{row['folder']}\t{row['input_videos']}\t"
+                f"{row['shorts']}\t{row['longform']}\t{rerun}\n"
+            )
+
+    return report_path
 
 
 def _init() -> None:
@@ -584,8 +674,7 @@ def batch(
             rich_console.print(f"[bold cyan]Folders:[/bold cyan] {len(subfolders)} found")
             rich_console.print("=" * 60)
 
-            success_count = 0
-            fail_count = 0
+            results: list[dict[str, str | int]] = []
             for idx, subfolder in enumerate(subfolders, 1):
                 rich_console.print(f"\n[bold]({idx}/{len(subfolders)})[/bold] {subfolder.name}")
                 try:
@@ -596,16 +685,60 @@ def batch(
                         fast=fast,
                         no_upload=True,
                     )
-                    success_count += 1
-                except SystemExit:
-                    pass
+                except SystemExit as e:
+                    logger.error("batch_vlog_failed", channel=channel, folder=str(subfolder), error=f"typer_exit:{e}")
                 except Exception as e:
                     rich_console.print(f"  [red]Error: {e}[/red]")
                     logger.error("batch_vlog_failed", channel=channel, folder=str(subfolder), error=str(e))
-                    fail_count += 1
 
+                row = _classify_vlog_outcome(
+                    folder=subfolder,
+                    output_folder=ch_config.output_folder,
+                    extensions=ext_list,
+                )
+                results.append(row)
+
+                rich_console.print(
+                    "  [bold]Folder result:[/bold] "
+                    f"{row['outcome']} | input_videos={row['input_videos']} | "
+                    f"shorts={row['shorts']} | longform={row['longform']}"
+                )
+
+            success_count = sum(1 for r in results if r["outcome"] == "SUCCESS")
+            partial_count = sum(1 for r in results if str(r["outcome"]).startswith("PARTIAL"))
+            fail_count = len(results) - success_count - partial_count
+
+            report_path = _write_vlog_summary_report(channel=channel, rows=results)
+
+            summary_table = Table(title="Vlog Folder Summary")
+            summary_table.add_column("Outcome", style="bold")
+            summary_table.add_column("Folder")
+            summary_table.add_column("Input")
+            summary_table.add_column("Shorts")
+            summary_table.add_column("Longform")
+            for row in results:
+                summary_table.add_row(
+                    str(row["outcome"]),
+                    str(row["folder"]),
+                    str(row["input_videos"]),
+                    str(row["shorts"]),
+                    str(row["longform"]),
+                )
+
+            rich_console.print("\n")
+            rich_console.print(summary_table)
             rich_console.print(f"\n[bold green]Batch complete![/bold green]")
-            rich_console.print(f"  Vlog folders — Processed: {success_count} | Failed: {fail_count}")
+            rich_console.print(
+                f"  Vlog folders — Success: {success_count} | Partial: {partial_count} | Failed: {fail_count}"
+            )
+            rich_console.print(f"  Report: {report_path}")
+
+            rerun_rows = [r for r in results if r["outcome"] != "SUCCESS"]
+            if rerun_rows:
+                rich_console.print("\n[bold yellow]Rerun commands for non-success folders:[/bold yellow]")
+                for row in rerun_rows:
+                    cmd = str(row["rerun"]).replace("{channel}", channel)
+                    rich_console.print(f"  {cmd}")
             return
 
         videos = discover_channel_videos(ch_config.input_folder, ext_list)
@@ -675,6 +808,76 @@ def batch(
             pass
         except Exception as e:
             rich_console.print(f"  [red]Long-form error: {e}[/red]")
+
+
+@app.command(name="audit-vlog")
+def audit_vlog(
+    channel: str = typer.Option(..., "--channel", "-c", help="Vlog channel name to audit."),
+    extensions: str = typer.Option("mp4,mov,avi,mkv", "--ext", help="Video extensions to evaluate in input folders."),
+) -> None:
+    """Audit vlog folder processing status without running any rendering."""
+    _init()
+    config = get_config()
+
+    ch_config = config.channels.get(channel)
+    if not ch_config:
+        rich_console.print(f"[bold red]Channel not found: {channel}[/bold red]")
+        rich_console.print(f"  Available: {', '.join(config.channels.keys())}")
+        raise typer.Exit(1)
+
+    if ch_config.type != "vlog":
+        rich_console.print(f"[bold red]Channel is not type='vlog': {channel}[/bold red]")
+        raise typer.Exit(1)
+
+    input_path = Path(ch_config.input_folder)
+    if not input_path.exists():
+        rich_console.print(f"[bold red]Input folder not found: {input_path}[/bold red]")
+        raise typer.Exit(1)
+
+    subfolders = sorted([d for d in input_path.iterdir() if d.is_dir()])
+    if not subfolders:
+        rich_console.print(f"[yellow]No vlog subfolders found in {input_path}[/yellow]")
+        raise typer.Exit(0)
+
+    ext_list = [f".{e.strip()}" for e in extensions.split(",")]
+    rows = [
+        _classify_vlog_outcome(folder=s, output_folder=ch_config.output_folder, extensions=ext_list)
+        for s in subfolders
+    ]
+
+    success_count = sum(1 for r in rows if r["outcome"] == "SUCCESS")
+    partial_count = sum(1 for r in rows if str(r["outcome"]).startswith("PARTIAL"))
+    fail_count = len(rows) - success_count - partial_count
+
+    table = Table(title=f"Vlog Audit: {channel}")
+    table.add_column("Outcome", style="bold")
+    table.add_column("Folder")
+    table.add_column("Input")
+    table.add_column("Shorts")
+    table.add_column("Longform")
+    for row in rows:
+        table.add_row(
+            str(row["outcome"]),
+            str(row["folder"]),
+            str(row["input_videos"]),
+            str(row["shorts"]),
+            str(row["longform"]),
+        )
+
+    report_path = _write_vlog_summary_report(channel=channel, rows=rows)
+
+    rich_console.print(table)
+    rich_console.print(
+        f"\n[bold cyan]Summary:[/bold cyan] Success={success_count}, Partial={partial_count}, Failed={fail_count}"
+    )
+    rich_console.print(f"[bold cyan]Report:[/bold cyan] {report_path}")
+
+    rerun_rows = [r for r in rows if r["outcome"] != "SUCCESS"]
+    if rerun_rows:
+        rich_console.print("\n[bold yellow]Rerun commands:[/bold yellow]")
+        for row in rerun_rows:
+            cmd = str(row["rerun"]).replace("{channel}", channel)
+            rich_console.print(f"  {cmd}")
 
 
 @app.command(name="batch-all")
