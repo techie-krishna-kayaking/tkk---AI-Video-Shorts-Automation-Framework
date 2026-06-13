@@ -147,7 +147,8 @@ python3 -m app.main batch --channel krishna_kayaking --max-clips 108
 # 1) KRGD_VLOGS (recommended): longform -> shorts, no upload
 caffeinate -dimsu python3 -m app.main batch --channel krgd_vlogs
 
-python3 -m app.main vlog input/krgd_vlogs/<FOLDER_NAME> --channel krgd_vlogs 
+# Single-folder run (optional)
+python3 -m app.main vlog input/krgd_vlogs/<FOLDER_NAME> --channel krgd_vlogs --no-upload
 
 # Schedule uploads
 python3 -m app.main schedule output/krishna_kayaking/ --channel krishna_kayaking
@@ -255,8 +256,9 @@ python3 -m app.main batch --channel techie_krishna_kayaking --max-clips 108
 python3 -m app.main batch --channel krishna_kayaking --max-clips 108
 
 # 1) KRGD_VLOGS (recommended): longform -> shorts, no upload
-caffeinate -dimsu python3 -m app.main vlog input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs --no-upload
+caffeinate -dimsu python3 -m app.main batch --channel krgd_vlogs
 
+# Single-folder run (optional)
 python3 -m app.main vlog input/krgd_vlogs/<FOLDER_NAME> --channel krgd_vlogs --no-upload
 
 # Schedule uploads
