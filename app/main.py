@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import sys
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from datetime import datetime
@@ -47,7 +48,7 @@ from app.utils.files import (
 )
 from app.utils.logging import console as rich_console, create_progress, get_logger, setup_logging
 from app.trending_audio_provider import TrendingAudioProvider
-from app.vlog_pipeline import create_platform_exports, create_vlog_longform, discover_vlog_media
+from app.vlog_pipeline import create_platform_exports, create_trip_scenic_highlight, create_vlog_longform, discover_vlog_media
 
 app = typer.Typer(
     name="shorts-ai",
@@ -55,6 +56,85 @@ app = typer.Typer(
     rich_markup_mode="rich",
 )
 logger = get_logger(__name__)
+
+
+def _extract_hook_line_for_clip(
+    clip_start: float,
+    clip_end: float,
+    segments,
+    preferred_keywords: list[str] | None = None,
+) -> str:
+    """Extract a concise, punchy hook line from transcript text overlapping a clip."""
+    if not segments:
+        return ""
+
+    overlap_texts: list[str] = []
+    for seg in segments:
+        # Any overlap with clip window
+        if seg.end < clip_start or seg.start > clip_end:
+            continue
+        text = (seg.text or "").strip()
+        if text:
+            overlap_texts.append(text)
+
+    if not overlap_texts:
+        return ""
+
+    combined = " ".join(overlap_texts)
+    combined = re.sub(r"\s+", " ", combined).strip()
+    if not combined:
+        return ""
+
+    sentence_candidates = [
+        s.strip(" -.,!?\"'\n\t")
+        for s in re.split(r"[.!?\n]+", combined)
+        if s.strip()
+    ]
+    if not sentence_candidates:
+        sentence_candidates = [combined]
+
+    keywords = [k.lower() for k in (preferred_keywords or []) if k]
+    default_keywords = [
+        "how", "why", "best", "secret", "mistake", "tip", "must", "important", "amazing", "beautiful", "adventure",
+    ]
+    keyword_pool = keywords + default_keywords
+
+    def score_sentence(sentence: str) -> tuple[float, int]:
+        words = sentence.split()
+        word_count = len(words)
+        if word_count < 3:
+            return (-1.0, word_count)
+
+        lowered = sentence.lower()
+        keyword_hits = sum(1 for kw in keyword_pool if kw and kw in lowered)
+        target_len_score = 1.0 - min(abs(word_count - 8) / 8.0, 1.0)
+        punctuation_boost = 0.2 if any(tok in lowered for tok in ["how", "why", "watch", "look", "must"]) else 0.0
+        score = (keyword_hits * 1.5) + (target_len_score * 2.0) + punctuation_boost
+        return (score, word_count)
+
+    best = max(sentence_candidates, key=lambda s: score_sentence(s))
+    words = best.split()
+    if len(words) > 10:
+        best = " ".join(words[:10])
+
+    return best.strip()
+
+
+def _build_fallback_hook_line(
+    preferred_keywords: list[str] | None = None,
+    video_name: str = "",
+) -> str:
+    base = "Must watch this full vlog moment"
+    if preferred_keywords:
+        key = preferred_keywords[0].strip()
+        if key:
+            base = f"{key.title()} moment you should not miss"
+    elif video_name:
+        words = [w for w in re.split(r"[_\-\s]+", video_name) if w]
+        if words:
+            title = " ".join(words[:4]).title()
+            base = f"Do not miss {title}"
+    return base
 
 
 def _count_source_videos(folder: Path, extensions: list[str]) -> int:
@@ -233,18 +313,43 @@ def process(
         rich_console.print("[yellow]No suitable clips found.[/yellow]")
         return []
 
-    # Step 3: Generate captions
+    # Step 3: Derive hook lines + optional captions
     subtitle_paths: dict[int, Path] = {}
+    rich_console.print("\n[bold]Step 3:[/bold] Preparing hook lines and captions...")
 
-    if not no_captions and config.captions.enabled:
-        rich_console.print("\n[bold]Step 3:[/bold] Generating captions...")
-        caption_gen = CaptionGenerator()
-
-        # Reuse transcription from clip selection (avoid re-transcribing entire video)
-        transcription = getattr(selector, '_last_transcription', None)
-        if transcription is None:
+    # Reuse transcription from clip selection when available; gopro path often needs a fresh transcription.
+    transcription = getattr(selector, '_last_transcription', None)
+    if transcription is None:
+        try:
             transcription = selector.transcriber.transcribe(video_path)
+        except Exception as exc:
+            logger.warning("hook_transcription_failed", video=str(video_path), error=str(exc))
+            transcription = None
 
+    hook_keywords = ch_config.hook_keywords if ch_config else []
+    for clip in selection.clips:
+        if clip.hook_text:
+            continue
+
+        hook_line = ""
+        if transcription is not None:
+            hook_line = _extract_hook_line_for_clip(
+                clip_start=clip.start,
+                clip_end=clip.end,
+                segments=transcription.segments,
+                preferred_keywords=hook_keywords,
+            )
+
+        if not hook_line:
+            hook_line = _build_fallback_hook_line(
+                preferred_keywords=hook_keywords,
+                video_name=video_name,
+            )
+
+        clip.hook_text = hook_line
+
+    if not no_captions and config.captions.enabled and transcription is not None:
+        caption_gen = CaptionGenerator()
         for idx, clip in enumerate(selection.clips):
             sub_path = output_dir / f"{video_name}_part{idx + 1:03d}"
             srt_path = caption_gen.generate_srt(
@@ -256,8 +361,9 @@ def process(
                 clip_start=clip.start, clip_end=clip.end,
             )
             subtitle_paths[idx] = srt_path
-
         rich_console.print(f"  Generated {len(subtitle_paths)} subtitle files")
+    elif not no_captions and config.captions.enabled:
+        rich_console.print("  [yellow]Captions skipped due to transcription failure.[/yellow]")
 
     # Step 4: Render clips
     rich_console.print("\n[bold]Step 4:[/bold] Rendering clips...")
@@ -507,7 +613,26 @@ def _run_vlog_workflow(
         output=str(output_dir),
     )
 
-    # Step 5: Optional upload + cleanup
+    # Step 5: Trip-level scenic highlight reel (4s scenic clips + transitions)
+    rich_console.print("\n[bold]Step 5:[/bold] Creating trip scenic highlight...")
+    scenic_dir = output_dir / "special_trip"
+    scenic_dir.mkdir(parents=True, exist_ok=True)
+    scenic_output = scenic_dir / f"{sanitize_filename(vlog_folder.name)}_scenic_highlight.mp4"
+    scenic_clip = create_trip_scenic_highlight(
+        trip_folder=vlog_folder,
+        ordered_videos=source_videos,
+        output_path=scenic_output,
+        clip_duration=4.0,
+        socials_overlay_path=longform_overlay_path,
+        title_text=vlog_folder.name,
+    )
+
+    if scenic_clip:
+        rich_console.print(f"  Scenic highlight: {scenic_clip.name}")
+    else:
+        rich_console.print("  [yellow]Scenic highlight skipped (not enough scenic candidates).[/yellow]")
+
+    # Step 6: Optional upload + cleanup
     if no_upload:
         rich_console.print("\n[bold yellow]Upload skipped due to --no-upload.[/bold yellow]")
         return
@@ -516,7 +641,7 @@ def _run_vlog_workflow(
         rich_console.print("\n[bold yellow]Upload skipped (upload_enabled=false for channel).[/bold yellow]")
         return
 
-    rich_console.print("\n[bold]Step 5:[/bold] Uploading YouTube exports...")
+    rich_console.print("\n[bold]Step 6:[/bold] Uploading YouTube exports...")
     logger.info("upload_started", channel=channel, count=len(exports.youtube_exports))
 
     uploader = YouTubeUploader(channel)
@@ -545,13 +670,15 @@ def _run_vlog_workflow(
         rich_console.print(f"  [green]Uploaded:[/green] {success_count}/{len(upload_results)}")
 
         if config.trip.cleanup_after_upload:
-            rich_console.print("\n[bold]Step 6:[/bold] Moving generated files to trash...")
+            rich_console.print("\n[bold]Step 7:[/bold] Moving generated files to trash...")
             generated_files = [
                 longform_result.output_path,
                 *exports.source_shorts,
                 *exports.youtube_exports,
                 *exports.instagram_exports,
             ]
+            if scenic_clip:
+                generated_files.append(scenic_clip)
             moved, errors = move_files_to_trash(generated_files)
             rich_console.print(f"  Moved to trash: {len(moved)}")
             if errors:

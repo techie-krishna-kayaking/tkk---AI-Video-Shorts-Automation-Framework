@@ -150,6 +150,10 @@ caffeinate -dimsu python3 -m app.main batch --channel krgd_vlogs
 # Single-folder run (optional)
 python3 -m app.main vlog input/krgd_vlogs/<FOLDER_NAME> --channel krgd_vlogs --no-upload
 
+python3 -m app.main vlog input/krgd_vlogs/TEST_ONE_VIDEO --channel krgd_vlogs --max-clips 1 --no-upload --fast
+
+
+
 # Schedule uploads
 python3 -m app.main schedule output/krishna_kayaking/ --channel krishna_kayaking
 python3 -m app.main schedule output/techie_krishna_kayaking/ --channel techie_krishna_kayaking
@@ -339,7 +343,10 @@ Vlog Folder (videos + photos)
   |   (full media duration)             (independent of long-form)
   |
   +-> Merge outputs
-  +-> Create platform variants (YouTube + Instagram with standard audio)
+  +-> Build scenic special-trip reel (4s scenic clips + transitions)
+  +-> Create platform variants in folders:
+      - YT/    -> no background music
+      - insta/ -> add background music from assets/bgmusic/
   +-> Optional: upload + trash cleanup
 ```
 
@@ -350,7 +357,8 @@ Vlog Folder (videos + photos)
 - **Aspect Ratio Preservation**: Mixed orientations centered with soft blurred background (no stretch/crop)
 - **Watermark**: Social overlay fixed top-left, 22% width, 72% opacity throughout long-form
 - **Captions**: Auto-generated SRT + ASS for both long-form and all shorts
-- **Audio**: YouTube + Instagram variants use original audio only (trending audio workflow removed)
+- **Scenic Reel**: Per trip folder, scenic 4-second mini clips are auto-selected and merged with smooth fades
+- **Audio Split**: YT exports are clean (no added BGM), insta exports auto-mix BGM from `assets/bgmusic/`
 
 #### Usage
 

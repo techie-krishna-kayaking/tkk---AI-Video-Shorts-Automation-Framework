@@ -10,6 +10,7 @@ from app.trip_pipeline import (
     MediaItem,
     PlatformExportResult,
     VlogLongformResult,
+    create_trip_scenic_highlight,
     create_platform_exports,
     create_vlog_longform,
     discover_vlog_media,
@@ -22,4 +23,5 @@ __all__ = [
     "discover_vlog_media",
     "create_vlog_longform",
     "create_platform_exports",
+    "create_trip_scenic_highlight",
 ]

@@ -84,8 +84,8 @@ class Renderer:
     def encoder(self) -> str:
         return self.gpu_encoder if self.gpu_available else self.cpu_encoder
 
-    def _generate_header_image(self, text: str, width: int = 1080, height: int = 420) -> Path:
-        """Generate a transparent PNG with large red text + YouTube logo for gopro header."""
+    def _generate_header_image(self, text: str, hook_text: str = "", width: int = 1080, height: int = 420) -> Path:
+        """Generate a transparent PNG with hook area + CTA text + YouTube logo for gopro header."""
         img = Image.new("RGBA", (width, height), (255, 255, 255, 0))
         draw = ImageDraw.Draw(img)
 
@@ -95,6 +95,52 @@ class Renderer:
             font = ImageFont.truetype(str(font_path), 56) if font_path.exists() else ImageFont.load_default()
         except Exception:
             font = ImageFont.load_default()
+
+        # Hook line area (rounded rectangle) at top.
+        box_margin_x = 120
+        box_top = 24
+        box_bottom = 170
+        box_radius = 28
+        draw.rounded_rectangle(
+            [(box_margin_x, box_top), (width - box_margin_x, box_bottom)],
+            radius=box_radius,
+            outline=(255, 54, 26, 255),
+            width=5,
+            fill=(255, 255, 255, 22),
+        )
+
+        # Draw hook text centered in the top rounded box.
+        if hook_text:
+            hook = hook_text.strip()
+            words = hook.split()
+            if len(words) > 8:
+                hook = " ".join(words[:8])
+
+            mid = len(words) // 2
+            hook_lines = [hook]
+            if len(words) >= 6:
+                hook_lines = [" ".join(words[:mid]), " ".join(words[mid:])]
+
+            try:
+                hook_font = ImageFont.truetype(str(font_path), 52) if font_path.exists() else ImageFont.load_default()
+            except Exception:
+                hook_font = ImageFont.load_default()
+
+            line_heights: list[int] = []
+            for ln in hook_lines:
+                bb = draw.textbbox((0, 0), ln, font=hook_font)
+                line_heights.append(bb[3] - bb[1])
+
+            total_h = sum(line_heights) + (10 if len(hook_lines) > 1 else 0)
+            y = box_top + ((box_bottom - box_top - total_h) // 2)
+
+            for idx, ln in enumerate(hook_lines):
+                bb = draw.textbbox((0, 0), ln, font=hook_font)
+                tw = bb[2] - bb[0]
+                th = bb[3] - bb[1]
+                x = (width - tw) // 2
+                draw.text((x, y), ln, fill=(25, 25, 25, 255), font=hook_font)
+                y += th + (10 if idx < len(hook_lines) - 1 else 0)
 
         # Line 1: "WATCH THE FULL VIDEO"
         line1 = "WATCH THE FULL VIDEO"
@@ -123,11 +169,10 @@ class Renderer:
         gap = 20
         line2_total_w = w2 + gap + yt_logo_w if yt_logo else w2
 
-        # Vertical spacing - use larger gap to accommodate logo height
-        line_gap = 25
+        # Fixed positions to keep CTA text clearly below the hook box.
+        line_gap = 22
         line2_row_h = max(h2, logo_h)
-        total_h = h1 + line_gap + line2_row_h
-        y_start = (height - total_h) // 2
+        y_start = box_bottom + 40
 
         # Draw line 1 centered
         x1 = (width - w1) // 2
@@ -287,7 +332,10 @@ class Renderer:
         # Add header image input for gopro mode
         header_input_idx: int | None = None
         if job.channel_type == "gopro" and job.video_info and job.video_info.aspect_ratio == AspectRatio.LANDSCAPE:
-            header_path = self._generate_header_image("WATCH THE FULL VIDEO on YOUTUBE ▶")
+            header_path = self._generate_header_image(
+                "WATCH THE FULL VIDEO on YOUTUBE ▶",
+                hook_text=job.hook_text,
+            )
             cmd.extend(["-i", str(header_path)])
             header_input_idx = input_count
             input_count += 1
@@ -354,7 +402,7 @@ class Renderer:
                 if header_input_idx is not None:
                     header_scale = f"[{header_input_idx}:v]scale={self.output_width}:-1[hdr]"
                     filters.append(header_scale)
-                    header_overlay = f"{current_stream}[hdr]overlay=(W-w)/2:300[headered]"
+                    header_overlay = f"{current_stream}[hdr]overlay=(W-w)/2:150[headered]"
                     filters.append(header_overlay)
                     current_stream = "[headered]"
 
@@ -408,13 +456,32 @@ class Renderer:
             current_stream = "[padded]"
 
         # Add hook text overlay at top (requires libfreetype)
-        if job.hook_text and self._has_drawtext_filter:
-            escaped_text = job.hook_text.replace("'", "\\'").replace(":", "\\:")
-            text_filter = (
-                f"{current_stream}drawtext=text='{escaped_text}'"
-                f":fontsize=42:fontcolor=white:borderw=3:bordercolor=black"
-                f":x=(w-text_w)/2:y=80:font=Montserrat[texted]"
+        if job.hook_text and self._has_drawtext_filter and job.channel_type != "gopro":
+            font_file = Path("assets/fonts/Montserrat-Bold.ttf")
+            font_arg = f":fontfile='{str(font_file).replace(':', '\\:')}'" if font_file.exists() else ""
+            escaped_text = (
+                job.hook_text
+                .replace("\\", "\\\\")
+                .replace("'", "\\'")
+                .replace(":", "\\:")
+                .replace(",", "\\,")
+                .replace("%", "\\%")
             )
+            if job.channel_type == "gopro":
+                # Position hook text inside the top marker area used in gopro layout.
+                text_filter = (
+                    f"{current_stream}drawtext=text='{escaped_text}'"
+                    f"{font_arg}"
+                    f":fontsize=54:fontcolor=black:borderw=2:bordercolor=white"
+                    f":x=(w-text_w)/2:y=190[texted]"
+                )
+            else:
+                text_filter = (
+                    f"{current_stream}drawtext=text='{escaped_text}'"
+                    f"{font_arg}"
+                    f":fontsize=42:fontcolor=white:borderw=3:bordercolor=black"
+                    f":x=(w-text_w)/2:y=80[texted]"
+                )
             filters.append(text_filter)
             current_stream = "[texted]"
 

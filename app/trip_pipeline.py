@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import shutil
 import subprocess
 import tempfile
@@ -13,11 +14,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ExifTags
+from PIL import Image, ExifTags, ImageDraw, ImageFont
 
 from app.utils.config import get_config
 from app.utils.files import get_video_duration, probe_video, sanitize_filename
 from app.utils.logging import get_logger
+from app.motion_detector import MotionDetector
+from app.scene_detector import SceneDetector
 
 logger = get_logger(__name__)
 
@@ -54,6 +57,62 @@ class PlatformExportResult:
     instagram_exports: list[Path]
     source_shorts: list[Path]
     mixed_tracks: list[dict[str, Any]]
+
+
+@dataclass
+class ScenicClipCandidate:
+    video_path: Path
+    start: float
+    end: float
+    score: float
+
+
+def _create_trip_title_overlay(title_text: str, output_path: Path, width: int = 900, height: int = 180) -> Path:
+    img = Image.new("RGBA", (width, height), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(img)
+
+    draw.rounded_rectangle(
+        [(0, 0), (width - 1, height - 1)],
+        radius=28,
+        outline=(255, 54, 26, 255),
+        width=5,
+        fill=(255, 255, 255, 230),
+    )
+
+    font_path = Path("assets/fonts/Montserrat-Bold.ttf")
+    try:
+        font = ImageFont.truetype(str(font_path), 56) if font_path.exists() else ImageFont.load_default()
+    except Exception:
+        font = ImageFont.load_default()
+
+    text = " ".join((title_text or "").split())
+    words = text.split()
+    if len(words) > 8:
+        text = " ".join(words[:8])
+        words = text.split()
+
+    lines = [text] if text else ["Trip Highlight"]
+    if len(words) >= 6:
+        mid = len(words) // 2
+        lines = [" ".join(words[:mid]), " ".join(words[mid:])]
+
+    heights: list[int] = []
+    widths: list[int] = []
+    for line in lines:
+        bb = draw.textbbox((0, 0), line, font=font)
+        widths.append(bb[2] - bb[0])
+        heights.append(bb[3] - bb[1])
+
+    total_h = sum(heights) + (10 if len(lines) > 1 else 0)
+    y = (height - total_h) // 2
+    for idx, line in enumerate(lines):
+        x = (width - widths[idx]) // 2
+        draw.text((x, y), line, fill=(20, 20, 20, 255), font=font)
+        y += heights[idx] + (10 if idx < len(lines) - 1 else 0)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(output_path)
+    return output_path
 
 
 # Backward-compatible result alias.
@@ -221,8 +280,11 @@ def _normalize_video_segment(
         cmd.extend(["-i", str(overlay_path)])
         overlay_w = max(120, int(width * 0.22))
         filter_complex += (
-            f";[1:v]scale={overlay_w}:-1,format=rgba,colorchannelmixer=aa=0.72[wm]"
-            f";[vbase][wm]overlay=40:40[vout]"
+            f";[1:v]scale={overlay_w}:-1,format=rgba,colorchannelmixer=aa=0.88[wm]"
+            f";[wm]split=2[wm_main][wm_glow_src]"
+            f";[wm_glow_src]gblur=sigma=10,colorchannelmixer=aa=0.55[wm_glow]"
+            f";[vbase][wm_glow]overlay=40:40[vtmp]"
+            f";[vtmp][wm_main]overlay=40:40[vout]"
         )
     else:
         filter_complex += ";[vbase]copy[vout]"
@@ -303,8 +365,11 @@ def _normalize_photo_segment(
         cmd.extend(["-i", str(overlay_path)])
         overlay_w = max(120, int(width * 0.22))
         filter_complex += (
-            f";[2:v]scale={overlay_w}:-1,format=rgba,colorchannelmixer=aa=0.72[wm]"
-            f";[vbase][wm]overlay=40:40[vout]"
+            f";[2:v]scale={overlay_w}:-1,format=rgba,colorchannelmixer=aa=0.88[wm]"
+            f";[wm]split=2[wm_main][wm_glow_src]"
+            f";[wm_glow_src]gblur=sigma=10,colorchannelmixer=aa=0.55[wm_glow]"
+            f";[vbase][wm_glow]overlay=40:40[vtmp]"
+            f";[vtmp][wm_main]overlay=40:40[vout]"
         )
     else:
         filter_complex += ";[vbase]copy[vout]"
@@ -486,27 +551,397 @@ def create_vlog_longform(
     )
 
 
+def _select_scenic_candidates(
+    video_path: Path,
+    clip_duration: float,
+    max_per_video: int,
+) -> list[ScenicClipCandidate]:
+    scene_detector = SceneDetector(threshold=24.0, min_scene_len=12)
+    motion_detector = MotionDetector(sample_rate=3, motion_threshold=0.25, min_segment_duration=2.0)
+
+    try:
+        scene_analysis = scene_detector.detect(video_path)
+    except Exception as exc:
+        logger.warning("scenic_scene_detect_failed", video=str(video_path), error=str(exc))
+        return []
+
+    try:
+        motion_analysis = motion_detector.analyze(video_path)
+    except Exception as exc:
+        logger.warning("scenic_motion_detect_failed", video=str(video_path), error=str(exc))
+        motion_analysis = None
+
+    candidates: list[ScenicClipCandidate] = []
+    for scene in scene_analysis.scenes:
+        if scene.duration < clip_duration:
+            continue
+
+        # Scenic views are usually stable or moderately dynamic.
+        motion_score = 0.5
+        if motion_analysis:
+            motion_score = motion_detector.get_excitement_score(motion_analysis, scene.start, scene.end)
+        scenic_motion_score = 1.0 - min(abs(motion_score - 0.28) / 0.28, 1.0)
+        duration_score = min(scene.duration / 12.0, 1.0)
+        score = (scenic_motion_score * 0.7) + (duration_score * 0.3)
+
+        start = scene.start + max(0.0, (scene.duration - clip_duration) / 2.0)
+        end = min(start + clip_duration, scene.end)
+        if end - start < clip_duration:
+            start = max(scene.start, end - clip_duration)
+
+        candidates.append(
+            ScenicClipCandidate(
+                video_path=video_path,
+                start=start,
+                end=end,
+                score=score,
+            )
+        )
+
+    candidates.sort(key=lambda item: item.score, reverse=True)
+
+    if not candidates:
+        # Fallback: evenly sample scenic windows so every trip can produce a reel.
+        duration = get_video_duration(video_path)
+        if duration > clip_duration:
+            usable = max(0.0, duration - clip_duration)
+            slots = max(1, max_per_video)
+            step = usable / slots if slots > 0 else usable
+            for i in range(slots):
+                start = min(usable, i * step)
+                end = start + clip_duration
+                candidates.append(
+                    ScenicClipCandidate(
+                        video_path=video_path,
+                        start=start,
+                        end=end,
+                        score=0.35,
+                    )
+                )
+
+    selected = candidates[:max_per_video]
+    selected.sort(key=lambda item: item.start)
+    return selected
+
+
+def create_trip_scenic_highlight(
+    trip_folder: Path,
+    ordered_videos: list[Path],
+    output_path: Path,
+    clip_duration: float = 4.0,
+    max_total_clips: int = 12,
+    max_per_video: int = 3,
+    socials_overlay_path: Path | None = None,
+    title_text: str | None = None,
+) -> Path | None:
+    """Build a scenic highlight by stitching 4s scenic clips with fade transitions."""
+    if not ordered_videos:
+        return None
+
+    all_candidates: list[ScenicClipCandidate] = []
+    for video_path in ordered_videos:
+        all_candidates.extend(_select_scenic_candidates(video_path, clip_duration=clip_duration, max_per_video=max_per_video))
+
+    if not all_candidates:
+        logger.warning("scenic_highlight_skipped", trip=str(trip_folder), reason="no_candidates")
+        return None
+
+    # Keep highest quality candidates, then restore timeline order for natural storytelling.
+    all_candidates.sort(key=lambda item: item.score, reverse=True)
+    selected = all_candidates[:max_total_clips]
+    selected.sort(key=lambda item: (str(item.video_path), item.start))
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_video = output_path.with_name(f"{output_path.stem}_tmp_noaudio.mp4")
+
+    cmd = ["ffmpeg", "-y"]
+    for clip in selected:
+        cmd.extend([
+            "-ss", f"{clip.start:.3f}",
+            "-t", f"{clip_duration:.3f}",
+            "-i", str(clip.video_path),
+        ])
+
+    tmp_title_overlay = output_path.with_name(f"{output_path.stem}_title_overlay.png")
+    has_title = False
+    if title_text:
+        _create_trip_title_overlay(title_text=title_text, output_path=tmp_title_overlay)
+        if tmp_title_overlay.exists():
+            cmd.extend(["-i", str(tmp_title_overlay)])
+            has_title = True
+
+    has_socials = socials_overlay_path is not None and socials_overlay_path.exists()
+    if has_socials:
+        cmd.extend(["-i", str(socials_overlay_path)])
+
+    filter_parts: list[str] = []
+    for idx, _clip in enumerate(selected):
+        fade_out_start = max(0.0, clip_duration - 0.35)
+        filter_parts.append(
+            f"[{idx}:v]"
+            "scale=1080:1920:force_original_aspect_ratio=increase,"
+            "boxblur=40:20,"
+            f"crop=1080:1920[bg{idx}]"
+        )
+        filter_parts.append(
+            f"[{idx}:v]"
+            f"scale=1080:1920:force_original_aspect_ratio=decrease[fg{idx}]"
+        )
+        filter_parts.append(
+            f"[bg{idx}][fg{idx}]overlay=(W-w)/2:(H-h)/2,"
+            "fps=30,"
+            "format=yuv420p,"
+            "fade=t=in:st=0:d=0.35,"
+            f"fade=t=out:st={fade_out_start:.2f}:d=0.35,"
+            f"setpts=PTS-STARTPTS[v{idx}]"
+        )
+
+    concat_inputs = "".join([f"[v{idx}]" for idx in range(len(selected))])
+
+    filter_parts.append(f"{concat_inputs}concat=n={len(selected)}:v=1:a=0[vcat]")
+
+    current = "[vcat]"
+    input_idx = len(selected)
+
+    if has_title:
+        filter_parts.append(f"[{input_idx}:v]format=rgba[trip_title]")
+        filter_parts.append(f"{current}[trip_title]overlay=(W-w)/2:70[vtitle]")
+        current = "[vtitle]"
+        input_idx += 1
+
+    if has_socials:
+        filter_parts.append(f"[{input_idx}:v]scale=980:-1,format=rgba,colorchannelmixer=aa=0.86[soc]")
+        filter_parts.append(f"{current}drawbox=x=40:y=ih-330:w=iw-80:h=220:color=white@0.16:t=fill[vsocbg]")
+        filter_parts.append(f"[vsocbg][soc]overlay=(W-w)/2:H-h-260[vout]")
+    else:
+        filter_parts.append(f"{current}copy[vout]")
+
+    cmd.extend([
+        "-filter_complex", ";".join(filter_parts),
+        "-map", "[vout]",
+        "-an",
+        "-c:v", "libx264",
+        "-preset", "medium",
+        "-crf", "18",
+        "-movflags", "+faststart",
+        str(tmp_video),
+    ])
+
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+        bg_tracks = _discover_bgm_tracks()
+        if bg_tracks:
+            bg_track = random.choice(bg_tracks)
+            audio_cmd = [
+                "ffmpeg",
+                "-y",
+                "-i", str(tmp_video),
+                "-stream_loop", "-1",
+                "-i", str(bg_track),
+                "-filter_complex", "[1:a]volume=0.28[bg]",
+                "-map", "0:v",
+                "-map", "[bg]",
+                "-c:v", "copy",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-shortest",
+                "-movflags", "+faststart",
+                str(output_path),
+            ]
+            subprocess.run(audio_cmd, check=True, capture_output=True, text=True)
+            tmp_video.unlink(missing_ok=True)
+        else:
+            tmp_video.replace(output_path)
+
+        logger.info(
+            "scenic_highlight_generated",
+            trip=str(trip_folder),
+            output=str(output_path),
+            clips=len(selected),
+            duration=f"{len(selected) * clip_duration:.1f}s",
+        )
+        return output_path
+    except subprocess.CalledProcessError as exc:
+        logger.error(
+            "scenic_highlight_failed",
+            trip=str(trip_folder),
+            error=exc.stderr[-300:] if exc.stderr else str(exc),
+        )
+        tmp_video.unlink(missing_ok=True)
+        tmp_title_overlay.unlink(missing_ok=True)
+        return None
+    finally:
+        tmp_title_overlay.unlink(missing_ok=True)
+
+
 def _copy_as_platform_variant(source: Path, suffix: str) -> Path:
     destination = source.with_name(f"{source.stem}_{suffix}.mp4")
     shutil.copy2(source, destination)
     return destination
 
 
+def _discover_bgm_tracks() -> list[Path]:
+    bg_dir = Path("assets") / "bgmusic"
+    if not bg_dir.exists():
+        return []
+
+    extensions = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
+    tracks = [
+        p for p in sorted(bg_dir.rglob("*"))
+        if p.is_file() and p.suffix.lower() in extensions
+    ]
+    return tracks
+
+
+def _add_background_music(
+    source_clip: Path,
+    destination_clip: Path,
+    bg_track: Path,
+    bg_volume: float,
+) -> tuple[bool, str | None]:
+    has_source_audio = _has_audio_stream(source_clip)
+
+    if has_source_audio:
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i", str(source_clip),
+            "-stream_loop", "-1",
+            "-i", str(bg_track),
+            "-filter_complex", f"[0:a]volume=0.18[orig];[1:a]volume={max(1.0, bg_volume)}[bg];[orig][bg]amix=inputs=2:duration=first:weights=0.25 1.0:dropout_transition=2,alimiter=limit=0.96[aout]",
+            "-map", "0:v",
+            "-map", "[aout]",
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-shortest",
+            "-movflags", "+faststart",
+            str(destination_clip),
+        ]
+    else:
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i", str(source_clip),
+            "-stream_loop", "-1",
+            "-i", str(bg_track),
+            "-map", "0:v",
+            "-map", "1:a",
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-shortest",
+            "-movflags", "+faststart",
+            str(destination_clip),
+        ]
+
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        return True, None
+    except subprocess.CalledProcessError as exc:
+        # Retry with video re-encode for clips/codecs that cannot stream-copy cleanly.
+        retry_cmd = list(cmd)
+        if "copy" in retry_cmd:
+            copy_idx = retry_cmd.index("copy")
+            retry_cmd[copy_idx] = "libx264"
+            retry_cmd.extend(["-preset", "veryfast", "-crf", "20"])
+        try:
+            subprocess.run(retry_cmd, check=True, capture_output=True, text=True)
+            return True, None
+        except subprocess.CalledProcessError as retry_exc:
+            return False, (retry_exc.stderr[-300:] if retry_exc.stderr else str(retry_exc))
+
+
 def create_platform_exports(short_clips: list[Path], output_dir: Path) -> PlatformExportResult:
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    yt_dir = output_dir / "YT"
+    insta_dir = output_dir / "insta"
+    yt_dir.mkdir(parents=True, exist_ok=True)
+    insta_dir.mkdir(parents=True, exist_ok=True)
+
+    config = get_config()
+    bg_tracks = _discover_bgm_tracks()
+    bg_volume = max(0.0, min(float(config.trip.instagram_music_volume), 1.0))
 
     yt_exports: list[Path] = []
     insta_exports: list[Path] = []
     mixed_tracks: list[dict[str, Any]] = []
 
-    for short_clip in short_clips:
-        yt_out = _copy_as_platform_variant(short_clip, "yt")
+    for idx, short_clip in enumerate(short_clips):
+        yt_out = yt_dir / f"{short_clip.stem}.mp4"
+        shutil.copy2(short_clip, yt_out)
         yt_exports.append(yt_out)
 
-        # Keep Instagram variant generation without platform-specific audio mixing.
-        insta_out = short_clip.with_name(f"{short_clip.stem}_insta.mp4")
-        shutil.copy2(yt_out, insta_out)
+        insta_out = insta_dir / f"{short_clip.stem}.mp4"
+        if bg_tracks:
+            bg_track = bg_tracks[idx % len(bg_tracks)] if len(bg_tracks) > 1 else random.choice(bg_tracks)
+            ok, error = _add_background_music(
+                source_clip=yt_out,
+                destination_clip=insta_out,
+                bg_track=bg_track,
+                bg_volume=bg_volume,
+            )
+            if ok:
+                mixed_tracks.append(
+                    {
+                        "clip": str(insta_out),
+                        "bg_track": str(bg_track),
+                        "bg_volume": bg_volume,
+                    }
+                )
+            else:
+                shutil.copy2(yt_out, insta_out)
+                mixed_tracks.append(
+                    {
+                        "clip": str(insta_out),
+                        "bg_track": str(bg_track),
+                        "bg_volume": bg_volume,
+                        "warning": f"mix_failed: {error}",
+                    }
+                )
+        else:
+            shutil.copy2(yt_out, insta_out)
+            mixed_tracks.append(
+                {
+                    "clip": str(insta_out),
+                    "bg_track": "none_found_assets_bgmusic",
+                }
+            )
         insta_exports.append(insta_out)
+
+        # Keep only platform variants in dedicated folders; remove raw root mp4 clip.
+        try:
+            short_clip.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("raw_short_cleanup_failed", clip=str(short_clip))
+
+    # Migrate legacy root platform files into dedicated folders.
+    for legacy in output_dir.glob("*_yt.mp4"):
+        try:
+            target = yt_dir / legacy.name.replace("_yt.mp4", ".mp4")
+            shutil.move(str(legacy), str(target))
+        except OSError:
+            logger.warning("legacy_yt_migration_failed", file=str(legacy))
+
+    for legacy in output_dir.glob("*_insta.mp4"):
+        try:
+            target = insta_dir / legacy.name.replace("_insta.mp4", ".mp4")
+            shutil.move(str(legacy), str(target))
+        except OSError:
+            logger.warning("legacy_insta_migration_failed", file=str(legacy))
+
+    # Keep root output clean: retain platform folders and remove root raw short videos.
+    root_raw_patterns = ["*_part*.mp4", "*_part*.mov", "*_part*.mkv"]
+    for pattern in root_raw_patterns:
+        for root_file in output_dir.glob(pattern):
+            if not root_file.is_file():
+                continue
+            try:
+                root_file.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("root_raw_clip_cleanup_failed", clip=str(root_file))
 
     logger.info(
         "platform_exports_complete",
