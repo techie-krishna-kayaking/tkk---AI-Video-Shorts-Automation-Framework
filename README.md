@@ -152,8 +152,11 @@ python3 -m app.main vlog input/krgd_vlogs/<FOLDER_NAME> --channel krgd_vlogs --n
 
 python3 -m app.main vlog input/krgd_vlogs/TEST_ONE_VIDEO --channel krgd_vlogs --max-clips 1 --no-upload --fast
 
+----
+# TEST - 
+python3 -m app.main vlog input/krgd_vlogs/test_short/ --channel krgd_vlogs --max-clips 1 --no-upload --fast
 
-
+----
 # Schedule uploads
 python3 -m app.main schedule output/krishna_kayaking/ --channel krishna_kayaking
 python3 -m app.main schedule output/techie_krishna_kayaking/ --channel techie_krishna_kayaking

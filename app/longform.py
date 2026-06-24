@@ -118,6 +118,13 @@ def generate_longform(
             safe_path = str(v.resolve()).replace("'", "'\\''")
             f.write(f"file '{safe_path}'\n")
 
+    source_has_audio = False
+    for v in valid_videos:
+        info = probe_video(v)
+        if any(stream.get("codec_type") == "audio" for stream in info.get("streams", [])):
+            source_has_audio = True
+            break
+
     # Build FFmpeg command
     cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file)]
 
@@ -146,20 +153,43 @@ def generate_longform(
     else:
         cmd.extend(["-c", "copy"])
 
-    # Output settings — high quality for long-form
+    if source_has_audio:
+        cmd.extend([
+            "-af",
+            "highpass=f=80,"
+            "lowpass=f=9000,"
+            "afftdn=nf=-20,"
+            "equalizer=f=220:t=q:w=1.1:g=-2,"
+            "equalizer=f=2800:t=q:w=1.0:g=2,"
+            "acompressor=threshold=0.09:ratio=2.2:attack=15:release=220:makeup=3,"
+            "alimiter=limit=0.96",
+        ])
+
+    # Output settings — high quality for long-form (YouTube optimized 1080p)
     if overlay_input_idx is not None:
         # Re-encode needed when applying overlay
         cmd.extend([
             "-c:v", "libx264",
-            "-preset", "medium",
-            "-crf", "18",
+            "-preset", "slower",
+            "-crf", "16",
+            "-maxrate", "6000k",
+            "-bufsize", "12000k",
             "-c:a", "aac",
-            "-b:a", "192k",
+            "-b:a", "320k",
             "-movflags", "+faststart",
         ])
     else:
-        # Stream copy (no re-encode) when no overlay — fastest
-        cmd.extend(["-movflags", "+faststart"])
+        # Re-encode anyway for quality consistency (no stream copy)
+        cmd.extend([
+            "-c:v", "libx264",
+            "-preset", "slower",
+            "-crf", "16",
+            "-maxrate", "6000k",
+            "-bufsize", "12000k",
+            "-c:a", "aac",
+            "-b:a", "320k",
+            "-movflags", "+faststart",
+        ])
 
     cmd.append(str(output_path))
 

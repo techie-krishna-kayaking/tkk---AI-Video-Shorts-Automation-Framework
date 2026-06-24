@@ -245,6 +245,7 @@ def process(
     no_captions: bool = typer.Option(False, "--no-captions", help="Skip caption generation."),
     no_upload: bool = typer.Option(False, "--no-upload", help="Skip upload even if enabled."),
     render_workers: Optional[int] = None,
+    output_name_override: Optional[str] = None,
 ) -> list[Path]:
     """Process a single video and generate shorts/reels."""
     _init()
@@ -260,10 +261,14 @@ def process(
     # Determine output directory and video name prefix
     if ch_config and ch_config.output_folder:
         output_dir = get_channel_output_dir(ch_config.output_folder)
-        video_name = get_channel_video_name(video_path, ch_config.input_folder)
+        video_name = (
+            sanitize_filename(output_name_override)
+            if output_name_override
+            else get_channel_video_name(video_path, ch_config.input_folder)
+        )
     else:
         output_dir = get_output_dir(video_path, config.output.base_dir)
-        video_name = sanitize_filename(video_path.stem)
+        video_name = sanitize_filename(output_name_override) if output_name_override else sanitize_filename(video_path.stem)
 
     rich_console.print(f"\n[bold cyan]Processing:[/bold cyan] {video_path.name}")
     if ch_config:
@@ -313,57 +318,98 @@ def process(
         rich_console.print("[yellow]No suitable clips found.[/yellow]")
         return []
 
+    # Guard against selector edge-cases where clip bounds exceed source duration.
+    valid_clips = []
+    dropped_clips = 0
+    max_duration = float(video_info.duration)
+    for clip in selection.clips:
+        clip.start = max(0.0, min(float(clip.start), max_duration))
+        clip.end = max(clip.start, min(float(clip.end), max_duration))
+        if (clip.end - clip.start) < 0.6:
+            dropped_clips += 1
+            continue
+        valid_clips.append(clip)
+
+    selection.clips = valid_clips
+    if dropped_clips:
+        logger.warning(
+            "invalid_clips_dropped",
+            video=str(video_path),
+            dropped=dropped_clips,
+            remaining=len(selection.clips),
+        )
+        rich_console.print(
+            f"  [yellow]Dropped invalid clips:[/yellow] {dropped_clips} "
+            f"(remaining: {len(selection.clips)})"
+        )
+
+    if not selection.clips:
+        rich_console.print("[yellow]No valid clips remained after bounds checks.[/yellow]")
+        return []
+
     # Step 3: Derive hook lines + optional captions
     subtitle_paths: dict[int, Path] = {}
-    rich_console.print("\n[bold]Step 3:[/bold] Preparing hook lines and captions...")
 
-    # Reuse transcription from clip selection when available; gopro path often needs a fresh transcription.
-    transcription = getattr(selector, '_last_transcription', None)
-    if transcription is None:
-        try:
-            transcription = selector.transcriber.transcribe(video_path)
-        except Exception as exc:
-            logger.warning("hook_transcription_failed", video=str(video_path), error=str(exc))
-            transcription = None
+    # Vlog/gopro shorts use the folder-name "<name> Part N" caption rendered from the
+    # output filename. They do NOT burn transcribed word-subtitles, so the entire
+    # transcription + hook-line + caption step is skipped (saves a full transcription pass).
+    is_filename_caption_style = bool(ch_config and ch_config.type in ("vlog", "gopro"))
 
-    hook_keywords = ch_config.hook_keywords if ch_config else []
-    for clip in selection.clips:
-        if clip.hook_text:
-            continue
+    if is_filename_caption_style:
+        rich_console.print(
+            "\n[bold]Step 3:[/bold] Skipping transcription/captions "
+            "(caption = folder name + part)."
+        )
+    else:
+        rich_console.print("\n[bold]Step 3:[/bold] Preparing hook lines and captions...")
 
-        hook_line = ""
-        if transcription is not None:
-            hook_line = _extract_hook_line_for_clip(
-                clip_start=clip.start,
-                clip_end=clip.end,
-                segments=transcription.segments,
-                preferred_keywords=hook_keywords,
-            )
+        # Reuse transcription from clip selection when available.
+        transcription = getattr(selector, '_last_transcription', None)
+        if transcription is None:
+            try:
+                transcription = selector.transcriber.transcribe(video_path)
+            except Exception as exc:
+                logger.warning("hook_transcription_failed", video=str(video_path), error=str(exc))
+                transcription = None
 
-        if not hook_line:
-            hook_line = _build_fallback_hook_line(
-                preferred_keywords=hook_keywords,
-                video_name=video_name,
-            )
+        hook_keywords = ch_config.hook_keywords if ch_config else []
+        for clip in selection.clips:
+            if clip.hook_text:
+                continue
 
-        clip.hook_text = hook_line
+            hook_line = ""
+            if transcription is not None:
+                hook_line = _extract_hook_line_for_clip(
+                    clip_start=clip.start,
+                    clip_end=clip.end,
+                    segments=transcription.segments,
+                    preferred_keywords=hook_keywords,
+                )
 
-    if not no_captions and config.captions.enabled and transcription is not None:
-        caption_gen = CaptionGenerator()
-        for idx, clip in enumerate(selection.clips):
-            sub_path = output_dir / f"{video_name}_part{idx + 1:03d}"
-            srt_path = caption_gen.generate_srt(
-                transcription, sub_path,
-                clip_start=clip.start, clip_end=clip.end,
-            )
-            caption_gen.generate_ass(
-                transcription, sub_path,
-                clip_start=clip.start, clip_end=clip.end,
-            )
-            subtitle_paths[idx] = srt_path
-        rich_console.print(f"  Generated {len(subtitle_paths)} subtitle files")
-    elif not no_captions and config.captions.enabled:
-        rich_console.print("  [yellow]Captions skipped due to transcription failure.[/yellow]")
+            if not hook_line:
+                hook_line = _build_fallback_hook_line(
+                    preferred_keywords=hook_keywords,
+                    video_name=video_name,
+                )
+
+            clip.hook_text = hook_line
+
+        if not no_captions and config.captions.enabled and transcription is not None:
+            caption_gen = CaptionGenerator()
+            for idx, clip in enumerate(selection.clips):
+                sub_path = output_dir / f"{video_name}_part{idx + 1:03d}"
+                srt_path = caption_gen.generate_srt(
+                    transcription, sub_path,
+                    clip_start=clip.start, clip_end=clip.end,
+                )
+                caption_gen.generate_ass(
+                    transcription, sub_path,
+                    clip_start=clip.start, clip_end=clip.end,
+                )
+                subtitle_paths[idx] = srt_path
+            rich_console.print(f"  Generated {len(subtitle_paths)} subtitle files")
+        elif not no_captions and config.captions.enabled:
+            rich_console.print("  [yellow]Captions skipped due to transcription failure.[/yellow]")
 
     # Step 4: Render clips
     rich_console.print("\n[bold]Step 4:[/bold] Rendering clips...")
@@ -520,12 +566,14 @@ def _run_vlog_workflow(
             no_captions=False,
             no_upload=True,
             render_workers=1,
+            output_name_override=vlog_folder.name,
         )
 
     short_clips: list[Path] = []
     short_errors = 0
     max_workers = max(1, int(getattr(config.processing, "max_workers", 4)))
-    short_workers = max(1, min(max_workers, 2))
+    # Keep short renders serialized to preserve part ordering for shared vlog clip names.
+    short_workers = 1
 
     with ThreadPoolExecutor(max_workers=short_workers + 1) as executor:
         longform_future = executor.submit(_build_longform)
@@ -625,6 +673,7 @@ def _run_vlog_workflow(
         clip_duration=4.0,
         socials_overlay_path=longform_overlay_path,
         title_text=vlog_folder.name,
+        include_source_audio=False,
     )
 
     if scenic_clip:

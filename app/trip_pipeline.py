@@ -33,6 +33,27 @@ EXIF_DATETIME_TAGS = {
     "DateTime",
 }
 
+VOICE_AUDIO_CHAIN = (
+    "aformat=sample_fmts=fltp:channel_layouts=stereo,"
+    "aresample=48000,"
+    "highpass=f=150,"
+    "lowpass=f=8000,"
+    "afftdn=nf=-28:tr=1:om=o,"
+    "equalizer=f=200:t=q:w=0.9:g=-4,"
+    "equalizer=f=1200:t=q:w=1.2:g=3.5,"
+    "equalizer=f=3500:t=q:w=1.1:g=2,"
+    "acompressor=threshold=0.06:ratio=3.5:attack=10:release=150:makeup=5,"
+    "alimiter=limit=0.95"
+)
+
+BG_AUDIO_CHAIN = (
+    "aformat=sample_fmts=fltp:channel_layouts=stereo,"
+    "aresample=48000,"
+    "highpass=f=200,"
+    "lowpass=f=5500,"
+    "afftdn=nf=-22"
+)
+
 
 @dataclass
 class MediaItem:
@@ -289,11 +310,14 @@ def _normalize_video_segment(
     else:
         filter_complex += ";[vbase]copy[vout]"
 
-    if _has_audio_stream(item.path):
+    has_audio = _has_audio_stream(item.path)
+
+    if has_audio:
+        filter_complex += f";[0:a]{VOICE_AUDIO_CHAIN}[aout]"
         cmd.extend([
             "-filter_complex", filter_complex,
             "-map", "[vout]",
-            "-map", "0:a",
+            "-map", "[aout]",
         ])
     else:
         cmd.extend([
@@ -311,7 +335,7 @@ def _normalize_video_segment(
         "-preset", "medium",
         "-crf", "18",
         "-c:a", "aac",
-        "-b:a", "192k",
+        "-b:a", "320k",
         "-ar", "48000",
         "-ac", "2",
         "-movflags", "+faststart",
@@ -513,7 +537,7 @@ def create_trip_longform(
                 "-preset", "medium",
                 "-crf", "18",
                 "-c:a", "aac",
-                "-b:a", "192k",
+                "-b:a", "320k",
                 "-ar", "48000",
                 "-ac", "2",
                 "-movflags", "+faststart",
@@ -629,10 +653,11 @@ def create_trip_scenic_highlight(
     ordered_videos: list[Path],
     output_path: Path,
     clip_duration: float = 4.0,
-    max_total_clips: int = 12,
-    max_per_video: int = 3,
+    max_total_clips: int = 10,
+    max_per_video: int = 5,
     socials_overlay_path: Path | None = None,
     title_text: str | None = None,
+    include_source_audio: bool = False,
 ) -> Path | None:
     """Build a scenic highlight by stitching 4s scenic clips with fade transitions."""
     if not ordered_videos:
@@ -674,6 +699,9 @@ def create_trip_scenic_highlight(
     if has_socials:
         cmd.extend(["-i", str(socials_overlay_path)])
 
+    # Use parameter-controlled audio inclusion for special clips; auto-detect for standard scenic
+    use_audio = include_source_audio and all(_has_audio_stream(clip.video_path) for clip in selected)
+
     filter_parts: list[str] = []
     for idx, _clip in enumerate(selected):
         fade_out_start = max(0.0, clip_duration - 0.35)
@@ -695,10 +723,21 @@ def create_trip_scenic_highlight(
             f"fade=t=out:st={fade_out_start:.2f}:d=0.35,"
             f"setpts=PTS-STARTPTS[v{idx}]"
         )
+        if use_audio:
+            filter_parts.append(
+                f"[{idx}:a]"
+                f"{VOICE_AUDIO_CHAIN},"
+                "afade=t=in:st=0:d=0.22,"
+                f"afade=t=out:st={fade_out_start:.2f}:d=0.22,"
+                f"asetpts=PTS-STARTPTS[a{idx}]"
+            )
 
     concat_inputs = "".join([f"[v{idx}]" for idx in range(len(selected))])
-
-    filter_parts.append(f"{concat_inputs}concat=n={len(selected)}:v=1:a=0[vcat]")
+    if use_audio:
+        concat_av_inputs = "".join([f"[v{idx}][a{idx}]" for idx in range(len(selected))])
+        filter_parts.append(f"{concat_av_inputs}concat=n={len(selected)}:v=1:a=1[vcat][acat]")
+    else:
+        filter_parts.append(f"{concat_inputs}concat=n={len(selected)}:v=1:a=0[vcat]")
 
     current = "[vcat]"
     input_idx = len(selected)
@@ -710,19 +749,25 @@ def create_trip_scenic_highlight(
         input_idx += 1
 
     if has_socials:
-        filter_parts.append(f"[{input_idx}:v]scale=980:-1,format=rgba,colorchannelmixer=aa=0.86[soc]")
-        filter_parts.append(f"{current}drawbox=x=40:y=ih-330:w=iw-80:h=220:color=white@0.16:t=fill[vsocbg]")
-        filter_parts.append(f"[vsocbg][soc]overlay=(W-w)/2:H-h-260[vout]")
+        filter_parts.append(f"[{input_idx}:v]scale=750:-1,format=rgba,colorchannelmixer=aa=0.92[soc]")
+        filter_parts.append("[soc]split=2[soc_main][soc_glow_src]")
+        filter_parts.append("[soc_glow_src]gblur=sigma=10,colorchannelmixer=aa=0.25[soc_glow]")
+        filter_parts.append(f"{current}[soc_glow]overlay=(W-w)/2:H-h-240[vsocglow]")
+        filter_parts.append("[vsocglow][soc_main]overlay=(W-w)/2:H-h-250[vout]")
     else:
         filter_parts.append(f"{current}copy[vout]")
 
+    cmd.extend(["-filter_complex", ";".join(filter_parts), "-map", "[vout]"])
+    if use_audio:
+        cmd.extend(["-map", "[acat]"])
+    else:
+        cmd.append("-an")
     cmd.extend([
-        "-filter_complex", ";".join(filter_parts),
-        "-map", "[vout]",
-        "-an",
         "-c:v", "libx264",
-        "-preset", "medium",
-        "-crf", "18",
+        "-preset", "slow",
+        "-crf", "16",
+        "-c:a", "aac",
+        "-b:a", "320k",
         "-movflags", "+faststart",
         str(tmp_video),
     ])
@@ -732,16 +777,18 @@ def create_trip_scenic_highlight(
 
         bg_tracks = _discover_bgm_tracks()
         if bg_tracks:
-            bg_track = random.choice(bg_tracks)
+            bg_track = bg_tracks[0]  # Use first track consistently
             audio_cmd = [
                 "ffmpeg",
                 "-y",
                 "-i", str(tmp_video),
                 "-stream_loop", "-1",
                 "-i", str(bg_track),
-                "-filter_complex", "[1:a]volume=0.28[bg]",
+                "-filter_complex",
+                "[1:a]aformat=sample_fmts=fltp:channel_layouts=stereo,aresample=48000,"
+                "highpass=f=40,volume=0.50,alimiter=limit=0.95[aout]",
                 "-map", "0:v",
-                "-map", "[bg]",
+                "-map", "[aout]",
                 "-c:v", "copy",
                 "-c:a", "aac",
                 "-b:a", "192k",
@@ -799,42 +846,34 @@ def _add_background_music(
     destination_clip: Path,
     bg_track: Path,
     bg_volume: float,
+    bg_offset_seconds: float = 0.0,
 ) -> tuple[bool, str | None]:
-    has_source_audio = _has_audio_stream(source_clip)
+    bg_gain = max(0.0, min(float(bg_volume), 1.0))
+    bg_seek = max(0.0, float(bg_offset_seconds))
 
-    if has_source_audio:
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-i", str(source_clip),
-            "-stream_loop", "-1",
-            "-i", str(bg_track),
-            "-filter_complex", f"[0:a]volume=0.18[orig];[1:a]volume={max(1.0, bg_volume)}[bg];[orig][bg]amix=inputs=2:duration=first:weights=0.25 1.0:dropout_transition=2,alimiter=limit=0.96[aout]",
-            "-map", "0:v",
-            "-map", "[aout]",
-            "-c:v", "copy",
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-shortest",
-            "-movflags", "+faststart",
-            str(destination_clip),
-        ]
-    else:
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-i", str(source_clip),
-            "-stream_loop", "-1",
-            "-i", str(bg_track),
-            "-map", "0:v",
-            "-map", "1:a",
-            "-c:v", "copy",
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-shortest",
-            "-movflags", "+faststart",
-            str(destination_clip),
-        ]
+    # Instagram reels are music-forward: replace the clip's audio entirely with
+    # the background song so it is clearly audible (no buried original voice).
+    # The clean music track only needs a gentle highpass + limiter, not the
+    # ambient noise-reduction chain used for spoken bike audio.
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i", str(source_clip),
+        "-stream_loop", "-1",
+        "-ss", f"{bg_seek:.3f}",
+        "-i", str(bg_track),
+        "-filter_complex",
+        f"[1:a]aformat=sample_fmts=fltp:channel_layouts=stereo,aresample=48000,"
+        f"highpass=f=40,volume={bg_gain:.3f},alimiter=limit=0.95[aout]",
+        "-map", "0:v",
+        "-map", "[aout]",
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-b:a", "256k",
+        "-shortest",
+        "-movflags", "+faststart",
+        str(destination_clip),
+    ]
 
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True)
@@ -863,7 +902,7 @@ def create_platform_exports(short_clips: list[Path], output_dir: Path) -> Platfo
 
     config = get_config()
     bg_tracks = _discover_bgm_tracks()
-    bg_volume = max(0.0, min(float(config.trip.instagram_music_volume), 1.0))
+    bg_volume = 0.55  # Subtle but clearly audible music-only volume for insta reels
 
     yt_exports: list[Path] = []
     insta_exports: list[Path] = []
@@ -876,12 +915,14 @@ def create_platform_exports(short_clips: list[Path], output_dir: Path) -> Platfo
 
         insta_out = insta_dir / f"{short_clip.stem}.mp4"
         if bg_tracks:
-            bg_track = bg_tracks[idx % len(bg_tracks)] if len(bg_tracks) > 1 else random.choice(bg_tracks)
+            bg_track = bg_tracks[idx % len(bg_tracks)] if len(bg_tracks) > 1 else bg_tracks[0]
+            bg_offset_seconds = float(idx * 30)
             ok, error = _add_background_music(
                 source_clip=yt_out,
                 destination_clip=insta_out,
                 bg_track=bg_track,
                 bg_volume=bg_volume,
+                bg_offset_seconds=bg_offset_seconds,
             )
             if ok:
                 mixed_tracks.append(
@@ -889,24 +930,33 @@ def create_platform_exports(short_clips: list[Path], output_dir: Path) -> Platfo
                         "clip": str(insta_out),
                         "bg_track": str(bg_track),
                         "bg_volume": bg_volume,
+                        "bg_offset_seconds": bg_offset_seconds,
                     }
                 )
             else:
+                logger.warning(
+                    "insta_bgm_mix_failed",
+                    clip=str(insta_out),
+                    error=error,
+                )
+                # Fallback: copy without audio, then add BGM via simple mix
                 shutil.copy2(yt_out, insta_out)
                 mixed_tracks.append(
                     {
                         "clip": str(insta_out),
                         "bg_track": str(bg_track),
                         "bg_volume": bg_volume,
-                        "warning": f"mix_failed: {error}",
+                        "bg_offset_seconds": bg_offset_seconds,
+                        "warning": f"mix_failed_fallback: {error}",
                     }
                 )
         else:
+            logger.warning("no_bgm_tracks_found", output=str(output_dir))
             shutil.copy2(yt_out, insta_out)
             mixed_tracks.append(
                 {
                     "clip": str(insta_out),
-                    "bg_track": "none_found_assets_bgmusic",
+                    "bg_track": "none_found",
                 }
             )
         insta_exports.append(insta_out)
@@ -933,7 +983,14 @@ def create_platform_exports(short_clips: list[Path], output_dir: Path) -> Platfo
             logger.warning("legacy_insta_migration_failed", file=str(legacy))
 
     # Keep root output clean: retain platform folders and remove root raw short videos.
-    root_raw_patterns = ["*_part*.mp4", "*_part*.mov", "*_part*.mkv"]
+    root_raw_patterns = [
+        "*_part*.mp4",
+        "*_part*.mov",
+        "*_part*.mkv",
+        "*_part*.srt",
+        "*_part*.ass",
+        "*_part*.json",
+    ]
     for pattern in root_raw_patterns:
         for root_file in output_dir.glob(pattern):
             if not root_file.is_file():

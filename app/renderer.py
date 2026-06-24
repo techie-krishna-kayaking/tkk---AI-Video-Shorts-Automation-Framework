@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -15,7 +16,7 @@ from app.clip_selector import Clip
 from app.detector import AspectRatio, VideoInfo
 from app.smart_crop import CropRegion, SmartCrop
 from app.utils.config import get_config
-from app.utils.files import check_gpu_available, get_clip_filename, get_next_part_number, sanitize_filename
+from app.utils.files import check_gpu_available, get_clip_filename, get_next_part_number, probe_video, sanitize_filename
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -74,6 +75,7 @@ class Renderer:
         self.smart_crop = SmartCrop()
         self._temp_links: list[Path] = []
         self._temp_files: list[Path] = []
+        self._audio_stream_cache: dict[str, bool] = {}
 
         if self.gpu_available:
             logger.info("gpu_rendering_enabled", encoder=self.gpu_encoder)
@@ -84,113 +86,76 @@ class Renderer:
     def encoder(self) -> str:
         return self.gpu_encoder if self.gpu_available else self.cpu_encoder
 
-    def _generate_header_image(self, text: str, hook_text: str = "", width: int = 1080, height: int = 420) -> Path:
-        """Generate a transparent PNG with hook area + CTA text + YouTube logo for gopro header."""
+    def _input_has_audio(self, path: Path) -> bool:
+        key = str(path.resolve())
+        cached = self._audio_stream_cache.get(key)
+        if cached is not None:
+            return cached
+        info = probe_video(path)
+        has_audio = any(stream.get("codec_type") == "audio" for stream in info.get("streams", []))
+        self._audio_stream_cache[key] = has_audio
+        return has_audio
+
+    def _wrap_text_to_width(self, draw, text: str, font, max_width: int) -> list[str]:
+        """Greedy word-wrap so each line fits within max_width."""
+        words = text.split()
+        lines: list[str] = []
+        current = ""
+        for word in words:
+            trial = f"{current} {word}".strip()
+            bb = draw.textbbox((0, 0), trial, font=font)
+            if (bb[2] - bb[0]) <= max_width or not current:
+                current = trial
+            else:
+                lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        return lines
+
+    def _generate_header_image(self, text: str, hook_text: str = "", width: int = 1080, height: int = 300) -> Path:
+        """Generate a transparent PNG with clip name (auto-wrapped/auto-shrunk) at top."""
         img = Image.new("RGBA", (width, height), (255, 255, 255, 0))
         draw = ImageDraw.Draw(img)
 
-        # Try to use Montserrat font, fall back to default
         font_path = Path("assets/fonts/Montserrat-Bold.ttf")
-        try:
-            font = ImageFont.truetype(str(font_path), 56) if font_path.exists() else ImageFont.load_default()
-        except Exception:
-            font = ImageFont.load_default()
+        display_text = hook_text.strip() if hook_text else ""
 
-        # Hook line area (rounded rectangle) at top.
-        box_margin_x = 120
-        box_top = 24
-        box_bottom = 170
-        box_radius = 28
-        draw.rounded_rectangle(
-            [(box_margin_x, box_top), (width - box_margin_x, box_bottom)],
-            radius=box_radius,
-            outline=(255, 54, 26, 255),
-            width=5,
-            fill=(255, 255, 255, 22),
-        )
+        if display_text:
+            max_text_width = width - 80  # 40px padding each side
+            lines: list[str] = [display_text]
+            chosen_font = None
 
-        # Draw hook text centered in the top rounded box.
-        if hook_text:
-            hook = hook_text.strip()
-            words = hook.split()
-            if len(words) > 8:
-                hook = " ".join(words[:8])
+            # Try decreasing font sizes until the text fits in at most 2 lines.
+            for font_size in (40, 36, 32, 28, 26, 24, 22):
+                try:
+                    font = ImageFont.truetype(str(font_path), font_size) if font_path.exists() else ImageFont.load_default()
+                except Exception:
+                    font = ImageFont.load_default()
+                wrapped = self._wrap_text_to_width(draw, display_text, font, max_text_width)
+                chosen_font = font
+                lines = wrapped
+                if len(wrapped) <= 2:
+                    break
 
-            mid = len(words) // 2
-            hook_lines = [hook]
-            if len(words) >= 6:
-                hook_lines = [" ".join(words[:mid]), " ".join(words[mid:])]
+            if chosen_font is None:
+                chosen_font = ImageFont.load_default()
 
-            try:
-                hook_font = ImageFont.truetype(str(font_path), 52) if font_path.exists() else ImageFont.load_default()
-            except Exception:
-                hook_font = ImageFont.load_default()
+            # Cap to 2 lines, adding an ellipsis if the title is extremely long.
+            if len(lines) > 2:
+                lines = lines[:2]
+                lines[1] = lines[1].rstrip(".") + "…"
 
-            line_heights: list[int] = []
-            for ln in hook_lines:
-                bb = draw.textbbox((0, 0), ln, font=hook_font)
-                line_heights.append(bb[3] - bb[1])
-
-            total_h = sum(line_heights) + (10 if len(hook_lines) > 1 else 0)
-            y = box_top + ((box_bottom - box_top - total_h) // 2)
-
-            for idx, ln in enumerate(hook_lines):
-                bb = draw.textbbox((0, 0), ln, font=hook_font)
+            line_heights = [draw.textbbox((0, 0), ln, font=chosen_font)[3] - draw.textbbox((0, 0), ln, font=chosen_font)[1] for ln in lines]
+            gap = 8
+            total_h = sum(line_heights) + gap * (len(lines) - 1)
+            y = max(16, (160 - total_h) // 2)
+            for i, ln in enumerate(lines):
+                bb = draw.textbbox((0, 0), ln, font=chosen_font)
                 tw = bb[2] - bb[0]
-                th = bb[3] - bb[1]
                 x = (width - tw) // 2
-                draw.text((x, y), ln, fill=(25, 25, 25, 255), font=hook_font)
-                y += th + (10 if idx < len(hook_lines) - 1 else 0)
-
-        # Line 1: "WATCH THE FULL VIDEO"
-        line1 = "WATCH THE FULL VIDEO"
-        bbox1 = draw.textbbox((0, 0), line1, font=font)
-        w1 = bbox1[2] - bbox1[0]
-        h1 = bbox1[3] - bbox1[1]
-
-        # Line 2: "on" + YouTube logo (logo replaces the word YOUTUBE)
-        line2_text = "on"
-        bbox2 = draw.textbbox((0, 0), line2_text, font=font)
-        w2 = bbox2[2] - bbox2[0]
-        h2 = bbox2[3] - bbox2[1]
-
-        # Load YouTube logo - sized prominently
-        yt_logo_path = Path("assets/overlays/Logo_of_YouTube.png")
-        yt_logo_w = 0
-        yt_logo = None
-        logo_h = 120  # fixed prominent size
-        if yt_logo_path.exists():
-            yt_logo = Image.open(str(yt_logo_path)).convert("RGBA")
-            logo_aspect = yt_logo.width / yt_logo.height
-            yt_logo_w = int(logo_h * logo_aspect)
-            yt_logo = yt_logo.resize((yt_logo_w, logo_h), Image.LANCZOS)
-
-        # Calculate total width of line2 (text + gap + logo)
-        gap = 20
-        line2_total_w = w2 + gap + yt_logo_w if yt_logo else w2
-
-        # Fixed positions to keep CTA text clearly below the hook box.
-        line_gap = 22
-        line2_row_h = max(h2, logo_h)
-        y_start = box_bottom + 40
-
-        # Draw line 1 centered
-        x1 = (width - w1) // 2
-        draw.text((x1, y_start), line1, fill=(255, 0, 0, 255), font=font)
-
-        # Draw line 2: "on" + logo, centered together
-        # The row starts after line1 + gap
-        y2_row = y_start + h1 + line_gap
-        x2 = (width - line2_total_w) // 2
-        # Vertically center "on" text within the row
-        y2_text = y2_row + (line2_row_h - h2) // 2
-        draw.text((x2, y2_text), line2_text, fill=(255, 0, 0, 255), font=font)
-
-        # Paste YouTube logo next to "on", vertically centered in row
-        if yt_logo:
-            logo_x = x2 + w2 + gap
-            logo_y = y2_row + (line2_row_h - logo_h) // 2
-            img.paste(yt_logo, (logo_x, logo_y), yt_logo)
+                draw.text((x, y), ln, fill=(25, 25, 25, 255), font=chosen_font)
+                y += line_heights[i] + gap
 
         # Save to temp file
         tmp_dir = Path(tempfile.gettempdir()) / "shorts_render"
@@ -199,6 +164,69 @@ class Renderer:
         img.save(str(header_path))
         self._temp_files.append(header_path)
         return header_path
+
+    def _generate_cta_image(self, width: int = 1080, height: int = 170) -> Path:
+        """Generate a single-line CTA PNG: 'WATCH THE FULL VIDEO on' + YouTube logo."""
+        img = Image.new("RGBA", (width, height), (255, 255, 255, 0))
+        draw = ImageDraw.Draw(img)
+
+        font_path = Path("assets/fonts/Montserrat-Bold.ttf")
+        try:
+            font = ImageFont.truetype(str(font_path), 46) if font_path.exists() else ImageFont.load_default()
+        except Exception:
+            font = ImageFont.load_default()
+
+        text = "WATCH THE FULL VIDEO on"
+        tb = draw.textbbox((0, 0), text, font=font)
+        tw = tb[2] - tb[0]
+        th = tb[3] - tb[1]
+
+        # Load YouTube logo to sit right after the text.
+        logo_path = Path("assets/overlays/Logo_of_YouTube.png")
+        logo = None
+        logo_w = 0
+        logo_h = 70
+        if logo_path.exists():
+            try:
+                logo = Image.open(str(logo_path)).convert("RGBA")
+                aspect = logo.width / logo.height
+                logo_w = int(logo_h * aspect)
+                logo = logo.resize((logo_w, logo_h), Image.LANCZOS)
+            except Exception:
+                logo = None
+                logo_w = 0
+
+        gap = 18
+        total_w = tw + (gap + logo_w if logo else 0)
+        x = (width - total_w) // 2
+        row_h = max(th, logo_h)
+        row_top = (height - row_h) // 2
+
+        y_text = row_top + (row_h - th) // 2 - tb[1]
+        draw.text((x, y_text), text, fill=(255, 0, 0, 255), font=font)
+
+        if logo:
+            logo_x = x + tw + gap
+            logo_y = row_top + (row_h - logo_h) // 2
+            img.paste(logo, (logo_x, logo_y), logo)
+
+        tmp_dir = Path(tempfile.gettempdir()) / "shorts_render"
+        tmp_dir.mkdir(exist_ok=True)
+        cta_path = tmp_dir / f"cta_{os.getpid()}.png"
+        img.save(str(cta_path))
+        self._temp_files.append(cta_path)
+        return cta_path
+
+    def _format_caption_from_output_filename(self, output_path: Path) -> str:
+        stem = output_path.stem
+        match = re.search(r"_part(\d+)$", stem, flags=re.IGNORECASE)
+        if not match:
+            return stem.replace("_", " ").strip().title()
+
+        base = stem[:match.start()]
+        part_num = int(match.group(1))
+        pretty_base = base.replace("_", " ").strip()
+        return f"{pretty_base} Part {part_num}"
 
     @property
     def _has_subtitle_filter(self) -> bool:
@@ -340,14 +368,34 @@ class Renderer:
             header_input_idx = input_count
             input_count += 1
 
+        # Add CTA image input (text + YouTube logo) for gopro mode
+        cta_input_idx: int | None = None
+        if job.channel_type == "gopro" and job.video_info and job.video_info.aspect_ratio == AspectRatio.LANDSCAPE:
+            cta_path = self._generate_cta_image()
+            cmd.extend(["-i", str(cta_path)])
+            cta_input_idx = input_count
+            input_count += 1
+
         # Build filter complex
-        filters = self._build_filter_complex(job, input_count, header_input_idx=header_input_idx, overlay_input_idx=overlay_input_idx)
+        filters = self._build_filter_complex(job, input_count, header_input_idx=header_input_idx, overlay_input_idx=overlay_input_idx, cta_input_idx=cta_input_idx)
 
         if filters:
             cmd.extend(["-filter_complex", filters])
             cmd.extend(["-map", "[vout]", "-map", "0:a?"])
         else:
             cmd.extend(["-map", "0:v", "-map", "0:a?"])
+
+        if self._input_has_audio(job.input_path):
+            cmd.extend([
+                "-af",
+                "highpass=f=80,"
+                "lowpass=f=9000,"
+                "afftdn=nf=-20,"
+                "equalizer=f=220:t=q:w=1.1:g=-2,"
+                "equalizer=f=2800:t=q:w=1.0:g=2,"
+                "acompressor=threshold=0.09:ratio=2.2:attack=15:release=220:makeup=3,"
+                "alimiter=limit=0.96",
+            ])
 
         # Encoding settings
         cmd.extend([
@@ -373,7 +421,7 @@ class Renderer:
         cmd.append(str(job.output_path))
         return cmd
 
-    def _build_filter_complex(self, job: RenderJob, input_count: int, header_input_idx: int | None = None, overlay_input_idx: int | None = None) -> str:
+    def _build_filter_complex(self, job: RenderJob, input_count: int, header_input_idx: int | None = None, overlay_input_idx: int | None = None, cta_input_idx: int | None = None) -> str:
         """Build FFmpeg filter_complex string."""
         filters: list[str] = []
         current_stream = "[0:v]"
@@ -405,6 +453,14 @@ class Renderer:
                     header_overlay = f"{current_stream}[hdr]overlay=(W-w)/2:150[headered]"
                     filters.append(header_overlay)
                     current_stream = "[headered]"
+
+                # CTA image (text + YouTube logo) overlaid above the socials.
+                if cta_input_idx is not None:
+                    cta_scale = f"[{cta_input_idx}:v]scale={int(self.output_width * 0.58)}:-1[ctaimg]"
+                    filters.append(cta_scale)
+                    cta_overlay = f"{current_stream}[ctaimg]overlay=(W-w)/2:H-h-260[ctad]"
+                    filters.append(cta_overlay)
+                    current_stream = "[ctad]"
 
             else:
                 # TUTORIAL mode: smart crop to 9:16
@@ -505,11 +561,11 @@ class Renderer:
         # Add overlay image at bottom (social footer)
         if job.overlay_path and job.overlay_path.exists() and overlay_input_idx is not None:
             overlay_scale = (
-                f"[{overlay_input_idx}:v]scale={self.output_width}:-1[ovl]"
+                f"[{overlay_input_idx}:v]scale={int(self.output_width * 0.48)}:-1[ovl]"
             )
             filters.append(overlay_scale)
             overlay_filter = (
-                f"{current_stream}[ovl]overlay=(W-w)/2:H-h-350[overlaid]"
+                f"{current_stream}[ovl]overlay=(W-w)/2:H-h-110[overlaid]"
             )
             filters.append(overlay_filter)
             current_stream = "[overlaid]"
@@ -600,7 +656,11 @@ class Renderer:
                 crop=clip_crop,
                 subtitle_path=sub_path,
                 overlay_path=overlay_path,
-                hook_text=clip.hook_text or hook_text,
+                hook_text=(
+                    self._format_caption_from_output_filename(output_path)
+                    if channel_type == "gopro"
+                    else (clip.hook_text or hook_text)
+                ),
                 video_info=video_info,
                 channel_type=channel_type,
             )
