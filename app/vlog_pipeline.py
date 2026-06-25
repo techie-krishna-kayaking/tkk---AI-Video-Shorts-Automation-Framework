@@ -10,6 +10,7 @@ from app.trip_pipeline import (
     MediaItem,
     PlatformExportResult,
     VlogLongformResult,
+    apply_music_only_audio,
     create_trip_scenic_highlight,
     create_platform_exports,
     create_vlog_longform,
@@ -24,4 +25,5 @@ __all__ = [
     "create_vlog_longform",
     "create_platform_exports",
     "create_trip_scenic_highlight",
+    "apply_music_only_audio",
 ]

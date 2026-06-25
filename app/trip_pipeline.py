@@ -332,8 +332,8 @@ def _normalize_video_segment(
     cmd.extend([
         "-r", str(fps),
         "-c:v", "libx264",
-        "-preset", "medium",
-        "-crf", "18",
+        "-preset", "slow",
+        "-crf", "16",
         "-c:a", "aac",
         "-b:a", "320k",
         "-ar", "48000",
@@ -534,8 +534,8 @@ def create_trip_longform(
                 "-safe", "0",
                 "-i", str(concat_file),
                 "-c:v", "libx264",
-                "-preset", "medium",
-                "-crf", "18",
+                "-preset", "slow",
+                "-crf", "16",
                 "-c:a", "aac",
                 "-b:a", "320k",
                 "-ar", "48000",
@@ -658,6 +658,7 @@ def create_trip_scenic_highlight(
     socials_overlay_path: Path | None = None,
     title_text: str | None = None,
     include_source_audio: bool = False,
+    bgm_subdir: str | None = None,
 ) -> Path | None:
     """Build a scenic highlight by stitching 4s scenic clips with fade transitions."""
     if not ordered_videos:
@@ -775,7 +776,7 @@ def create_trip_scenic_highlight(
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True)
 
-        bg_tracks = _discover_bgm_tracks()
+        bg_tracks = _discover_bgm_tracks(bgm_subdir)
         if bg_tracks:
             bg_track = bg_tracks[0]  # Use first track consistently
             audio_cmd = [
@@ -791,7 +792,7 @@ def create_trip_scenic_highlight(
                 "-map", "[aout]",
                 "-c:v", "copy",
                 "-c:a", "aac",
-                "-b:a", "192k",
+                "-b:a", "256k",
                 "-shortest",
                 "-movflags", "+faststart",
                 str(output_path),
@@ -828,17 +829,35 @@ def _copy_as_platform_variant(source: Path, suffix: str) -> Path:
     return destination
 
 
-def _discover_bgm_tracks() -> list[Path]:
-    bg_dir = Path("assets") / "bgmusic"
-    if not bg_dir.exists():
-        return []
+def _discover_bgm_tracks(subdir: str | None = None) -> list[Path]:
+    """Discover background-music tracks.
 
+    - With ``subdir`` (e.g. "yt" or "insta"): use tracks from
+      ``assets/bgmusic/<subdir>`` (recursively). Falls back to the root pool
+      if that subfolder has no tracks yet.
+    - Without ``subdir``: only top-level files in ``assets/bgmusic`` so the
+      ``yt``/``insta`` subfolders stay isolated from the default flow.
+    """
+    base = Path("assets") / "bgmusic"
     extensions = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
-    tracks = [
-        p for p in sorted(bg_dir.rglob("*"))
-        if p.is_file() and p.suffix.lower() in extensions
-    ]
-    return tracks
+
+    def _collect(folder: Path, recursive: bool) -> list[Path]:
+        if not folder.exists():
+            return []
+        entries = folder.rglob("*") if recursive else folder.glob("*")
+        return [
+            p for p in sorted(entries)
+            if p.is_file() and p.suffix.lower() in extensions
+        ]
+
+    if subdir:
+        tracks = _collect(base / subdir, recursive=True)
+        if tracks:
+            return tracks
+        # Subfolder missing/empty -> fall back to the general root pool.
+        return _collect(base, recursive=False)
+
+    return _collect(base, recursive=False)
 
 
 def _add_background_music(
@@ -884,7 +903,7 @@ def _add_background_music(
         if "copy" in retry_cmd:
             copy_idx = retry_cmd.index("copy")
             retry_cmd[copy_idx] = "libx264"
-            retry_cmd.extend(["-preset", "veryfast", "-crf", "20"])
+            retry_cmd.extend(["-preset", "slow", "-crf", "16"])
         try:
             subprocess.run(retry_cmd, check=True, capture_output=True, text=True)
             return True, None
@@ -892,7 +911,44 @@ def _add_background_music(
             return False, (retry_exc.stderr[-300:] if retry_exc.stderr else str(retry_exc))
 
 
-def create_platform_exports(short_clips: list[Path], output_dir: Path) -> PlatformExportResult:
+def apply_music_only_audio(
+    video_path: Path,
+    bgm_subdir: str,
+    bg_volume: float = 0.5,
+) -> bool:
+    """Replace a video's audio entirely with a background-music track.
+
+    Used by the music-only vlog workflow (e.g. long-form). Returns True when the
+    audio was successfully swapped, False if no track was available or the mux
+    failed (in which case the original file is left untouched).
+    """
+    tracks = _discover_bgm_tracks(bgm_subdir)
+    if not tracks:
+        logger.warning("music_only_no_tracks", video=str(video_path), subdir=bgm_subdir)
+        return False
+
+    tmp_path = video_path.with_name(f"{video_path.stem}_musiconly_tmp.mp4")
+    ok, error = _add_background_music(
+        source_clip=video_path,
+        destination_clip=tmp_path,
+        bg_track=tracks[0],
+        bg_volume=bg_volume,
+        bg_offset_seconds=0.0,
+    )
+    if ok and tmp_path.exists():
+        tmp_path.replace(video_path)
+        return True
+
+    tmp_path.unlink(missing_ok=True)
+    logger.warning("music_only_mux_failed", video=str(video_path), error=error)
+    return False
+
+
+def create_platform_exports(
+    short_clips: list[Path],
+    output_dir: Path,
+    music_only: bool = False,
+) -> PlatformExportResult:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     yt_dir = output_dir / "YT"
@@ -901,8 +957,10 @@ def create_platform_exports(short_clips: list[Path], output_dir: Path) -> Platfo
     insta_dir.mkdir(parents=True, exist_ok=True)
 
     config = get_config()
-    bg_tracks = _discover_bgm_tracks()
-    bg_volume = 0.55  # Subtle but clearly audible music-only volume for insta reels
+    # Instagram always replaces audio with music; in music-only mode YouTube does too.
+    insta_bg_tracks = _discover_bgm_tracks("insta") if music_only else _discover_bgm_tracks()
+    yt_bg_tracks = _discover_bgm_tracks("yt") if music_only else []
+    bg_volume = 0.55  # Subtle but clearly audible music-only volume
 
     yt_exports: list[Path] = []
     insta_exports: list[Path] = []
@@ -910,13 +968,39 @@ def create_platform_exports(short_clips: list[Path], output_dir: Path) -> Platfo
 
     for idx, short_clip in enumerate(short_clips):
         yt_out = yt_dir / f"{short_clip.stem}.mp4"
-        shutil.copy2(short_clip, yt_out)
+        bg_offset_seconds = float(idx * 30)
+
+        if music_only and yt_bg_tracks:
+            # YouTube short: drop raw audio, use the YT music pool.
+            yt_track = yt_bg_tracks[idx % len(yt_bg_tracks)] if len(yt_bg_tracks) > 1 else yt_bg_tracks[0]
+            ok, error = _add_background_music(
+                source_clip=short_clip,
+                destination_clip=yt_out,
+                bg_track=yt_track,
+                bg_volume=bg_volume,
+                bg_offset_seconds=bg_offset_seconds,
+            )
+            if ok:
+                mixed_tracks.append(
+                    {
+                        "clip": str(yt_out),
+                        "platform": "youtube",
+                        "bg_track": str(yt_track),
+                        "bg_volume": bg_volume,
+                        "bg_offset_seconds": bg_offset_seconds,
+                    }
+                )
+            else:
+                logger.warning("yt_bgm_mix_failed", clip=str(yt_out), error=error)
+                shutil.copy2(short_clip, yt_out)
+        else:
+            # Default: keep the rendered short's (raw) audio for YouTube.
+            shutil.copy2(short_clip, yt_out)
         yt_exports.append(yt_out)
 
         insta_out = insta_dir / f"{short_clip.stem}.mp4"
-        if bg_tracks:
-            bg_track = bg_tracks[idx % len(bg_tracks)] if len(bg_tracks) > 1 else bg_tracks[0]
-            bg_offset_seconds = float(idx * 30)
+        if insta_bg_tracks:
+            bg_track = insta_bg_tracks[idx % len(insta_bg_tracks)] if len(insta_bg_tracks) > 1 else insta_bg_tracks[0]
             ok, error = _add_background_music(
                 source_clip=yt_out,
                 destination_clip=insta_out,
@@ -928,6 +1012,7 @@ def create_platform_exports(short_clips: list[Path], output_dir: Path) -> Platfo
                 mixed_tracks.append(
                     {
                         "clip": str(insta_out),
+                        "platform": "instagram",
                         "bg_track": str(bg_track),
                         "bg_volume": bg_volume,
                         "bg_offset_seconds": bg_offset_seconds,
@@ -944,6 +1029,7 @@ def create_platform_exports(short_clips: list[Path], output_dir: Path) -> Platfo
                 mixed_tracks.append(
                     {
                         "clip": str(insta_out),
+                        "platform": "instagram",
                         "bg_track": str(bg_track),
                         "bg_volume": bg_volume,
                         "bg_offset_seconds": bg_offset_seconds,
@@ -956,6 +1042,7 @@ def create_platform_exports(short_clips: list[Path], output_dir: Path) -> Platfo
             mixed_tracks.append(
                 {
                     "clip": str(insta_out),
+                    "platform": "instagram",
                     "bg_track": "none_found",
                 }
             )

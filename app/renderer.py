@@ -401,17 +401,25 @@ class Renderer:
         cmd.extend([
             "-c:v", self.encoder,
             "-preset", self.preset,
-            "-b:v", self.video_bitrate,
             "-c:a", "aac",
             "-b:a", self.audio_bitrate,
-            "-ar", "44100",
+            "-ar", "48000",
             "-r", str(self.fps),
+            "-pix_fmt", "yuv420p",
             "-movflags", "+faststart",
         ])
 
-        # CRF for CPU encoding
-        if not self.gpu_available:
-            cmd.extend(["-crf", str(self.crf)])
+        if self.gpu_available:
+            # GPU (NVENC): high constant-quality with a generous bitrate ceiling
+            cmd.extend(["-b:v", self.video_bitrate])
+        else:
+            # CPU (libx264): pure CRF for maximum quality. A generous maxrate
+            # ceiling prevents runaway files without capping normal footage.
+            cmd.extend([
+                "-crf", str(self.crf),
+                "-maxrate", self.video_bitrate,
+                "-bufsize", "32M",
+            ])
 
         # Subtitle burning (if provided and not in filter)
         if job.subtitle_path and job.subtitle_path.exists():

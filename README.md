@@ -111,72 +111,57 @@
 ## TABLE OF CONTENTS
 
 1. [Tech Stack](#️-tech-stack)
-2. [Multi-Channel Architecture](#-multi-channel-architecture)
-3. [Long-form Video Generation](#-long-form-video-generation)
-4. [Scheduled Uploads](#-scheduled-uploads)
-5. [macOS Setup (All Steps)](#-macos-complete-setup)
-6. [Windows Setup (All Steps)](#-windows-complete-setup)
-7. [YouTube API & Credentials Setup](#youtube-api--credentials-setup)
-8. [Configuration Reference](#configuration-reference)
-9. [Architecture & Pipeline](#architecture)
-10. [Docker (Linux Servers)](#docker-linux-servers)
-11. [Troubleshooting](#troubleshooting)
+2. [CLI Quick Reference](#cli-quick-reference)
+3. [Multi-Channel Architecture](#-multi-channel-architecture)
+4. [Long-form Video Generation](#-long-form-video-generation)
+5. [Scheduled Uploads](#-scheduled-uploads)
+6. [macOS Setup (All Steps)](#-macos-complete-setup)
+7. [Windows Setup (All Steps)](#-windows-complete-setup)
+8. [YouTube API & Credentials Setup](#youtube-api--credentials-setup)
+9. [Configuration Reference](#configuration-reference)
+10. [Architecture & Pipeline](#architecture)
+11. [Docker (Linux Servers)](#docker-linux-servers)
+12. [Troubleshooting](#troubleshooting)
 
 ---
 
 ### CLI Quick Reference
 
+> Activate the virtualenv first in every new terminal: `source .venv/bin/activate`
+
 ```bash
-# Activate it (you must do this every time you open a new terminal)
-source .venv/bin/activate
+# ── Discover ───────────────────────────────────────────────
+python3 -m app.main channels                      # list all configured channels
 
-# MAIN COMMAND 1: List all configured channels
-python3 -m app.main channels
+# ── Render ALL channels (smart-routes vlog/gopro/tutorial, no upload) ──
+caffeinate -dimsu python3 -m app.main batch-all                  # quality pass (final)
+caffeinate -dimsu python3 -m app.main batch-all --fast           # quick test pass
 
-# MAIN COMMAND 2: Fast batch-all (quick runs/testing)
-python3 -m app.main batch-all --fast --max-clips 1008
+# ── Render a SINGLE channel ────────────────────────────────
+caffeinate -dimsu python3 -m app.main batch --channel krgd_vlogs               # vlog: longform + shorts (parallel)
+caffeinate -dimsu python3 -m app.main batch --channel techie_krishna_kayaking --max-clips 108
+caffeinate -dimsu python3 -m app.main batch --channel krishna_kayaking --max-clips 108
+caffeinate -dimsu python3 -m app.main batch --channel tkk_live_shorts --max-clips 108
 
-# MAIN COMMAND 3: Quality batch-all (final runs)
-python3 -m app.main batch-all --max-clips 1008
+# ── Render a SINGLE folder / quick test ────────────────────
+caffeinate -dimsu python3 -m app.main vlog "input/krgd_vlogs/<FOLDER_NAME>" --channel krgd_vlogs --no-upload
+caffeinate -dimsu python3 -m app.main vlog "input/krgd_vlogs/test_short" --channel krgd_vlogs --max-clips 1 --no-upload --fast
 
-# Render clips
-python3 -m app.main batch --channel tkk_live_shorts --max-clips 108
-python3 -m app.main batch --channel techie_krishna_kayaking --max-clips 108
-python3 -m app.main batch --channel krishna_kayaking --max-clips 108
+# ── Music-only folder (drop raw audio; YT→assets/bgmusic/yt, Insta→assets/bgmusic/insta) ──
+caffeinate -dimsu python3 -m app.main vlog-music "input/krgd_vlogs/<FOLDER_NAME>" --channel krgd_vlogs --no-upload
 
-# 1) KRGD_VLOGS (recommended): longform -> shorts, no upload
-caffeinate -dimsu python3 -m app.main batch --channel krgd_vlogs
-
-# Single-folder run (optional)
-python3 -m app.main vlog input/krgd_vlogs/<FOLDER_NAME> --channel krgd_vlogs --no-upload
-
-python3 -m app.main vlog input/krgd_vlogs/TEST_ONE_VIDEO --channel krgd_vlogs --max-clips 1 --no-upload --fast
-
-----
-# TEST - 
-python3 -m app.main vlog input/krgd_vlogs/test_short/ --channel krgd_vlogs --max-clips 1 --no-upload --fast
-
-----
-# Schedule uploads
+# ── Schedule + upload (7-day spread) ───────────────────────
+python3 -m app.main schedule output/krgd_vlogs/ --channel krgd_vlogs
 python3 -m app.main schedule output/krishna_kayaking/ --channel krishna_kayaking
 python3 -m app.main schedule output/techie_krishna_kayaking/ --channel techie_krishna_kayaking
 python3 -m app.main schedule output/tkk_live_shorts/ --channel tkk_live_shorts
-python3 -m app.main schedule output/krgd_vlogs/ --channel krgd_vlogs
 
-# Execute all pending scheduled uploads
-python3 -m app.main execute-schedule
-
-# Clear all pending scheduled uploads (keep history)
-python3 -m app.main reset-schedule
-
-# Full reset: clear schedule + upload history
-python3 -m app.main reset-schedule --all
+caffeinate -dimsu python3 -m app.main execute-schedule          # run all pending uploads
+python3 -m app.main reset-schedule                # clear pending (keep history)
+python3 -m app.main reset-schedule --all          # full reset (schedule + history)
 ```
 
-Fast vs non-fast:
-
-- Use `--fast` for speed.
-- Omit `--fast` for better transcription/caption quality.
+**`--fast`** uses the tiny Whisper model (~2× faster); omit it for best transcription/caption quality. **`caffeinate -dimsu`** keeps macOS awake during long runs. See [Other CLI Commands](#other-cli-commands) for long-form, watch, and single-video commands.
 
 ---
 ## 🎛️ Multi-Channel Architecture
@@ -220,6 +205,11 @@ assets/social/                   ← Per-channel socials overlays
 ├── krgd_vlogs_socials.png
 ├── tkk_socials.png
 └── kk_socials.png
+
+assets/bgmusic/                  ← Background music tracks
+├── *.mp3                        ← Default pool (insta auto-mix in normal vlog runs)
+├── yt/                          ← YouTube music for `vlog-music` (long-form, shorts, scenic)
+└── insta/                       ← Instagram music for `vlog-music` reels
 ```
 
 ### Key Concepts
@@ -237,93 +227,50 @@ assets/social/                   ← Per-channel socials overlays
 | Channel Type | Rendering | Description |
 |---|---|---|
 | `tutorial` | Smart crop 16:9 → 9:16 | Face-aware cropping, fills the entire vertical frame |
-| `gopro` | White letterbox | Video centered on white 9:16 canvas (no camera area lost), "WATCH THE FULL VIDEO" + YouTube logo at top, socials at bottom |
+| `gopro` | White letterbox | Video centered on white 9:16 canvas (no camera area lost). Caption (`<folder> Part N`) at top; "WATCH THE FULL VIDEO" + YouTube logo below the video, right above the socials footer |
 | `vertical` | Trim only | Already 9:16, just split at boundaries |
 
 **Additionally for `gopro` channels:** Long-form videos are auto-generated per subfolder (see below).
-
-### CLI Quick Reference
-
-```bash
-# Activate it (you must do this every time you open a new terminal)
-source .venv/bin/activate
-
-# MAIN COMMAND 1: List all configured channels
-python3 -m app.main channels
-
-# MAIN COMMAND 2: Fast batch-all (quick runs/testing)
-python3 -m app.main batch-all --fast --max-clips 1008
-
-# MAIN COMMAND 3: Quality batch-all (final runs)
-python3 -m app.main batch-all --max-clips 1008
-
-# Render clips
-python3 -m app.main batch --channel tkk_live_shorts --max-clips 108
-python3 -m app.main batch --channel techie_krishna_kayaking --max-clips 108
-python3 -m app.main batch --channel krishna_kayaking --max-clips 108
-
-# 1) KRGD_VLOGS (recommended): longform -> shorts, no upload
-caffeinate -dimsu python3 -m app.main batch --channel krgd_vlogs
-
-# Single-folder run (optional)
-python3 -m app.main vlog input/krgd_vlogs/<FOLDER_NAME> --channel krgd_vlogs --no-upload
-
-# Schedule uploads
-python3 -m app.main schedule output/krishna_kayaking/ --channel krishna_kayaking
-python3 -m app.main schedule output/techie_krishna_kayaking/ --channel techie_krishna_kayaking
-python3 -m app.main schedule output/tkk_live_shorts/ --channel tkk_live_shorts
-python3 -m app.main schedule output/krgd_vlogs/ --channel krgd_vlogs
-
-# Execute all pending scheduled uploads
-python3 -m app.main execute-schedule
-
-# Clear all pending scheduled uploads (keep history)
-python3 -m app.main reset-schedule
-
-# Full reset: clear schedule + upload history
-python3 -m app.main reset-schedule --all
-```
-
-Fast vs non-fast:
-
-- Use `--fast` for speed.
-- Omit `--fast` for better transcription/caption quality.
 
 ### Other CLI Commands
 
 ```bash
 # Process a mixed-media vlog folder (phone videos + photos + action cam clips)
-python3 -m app.main vlog input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs
+caffeinate -dimsu python3 -m app.main vlog input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs
+
+# Music-only variant: drop raw audio, use background music on every output
+# (YouTube → assets/bgmusic/yt, Instagram → assets/bgmusic/insta)
+caffeinate -dimsu python3 -m app.main vlog-music input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs
 
 # Backward-compatible alias for vlog command
-python3 -m app.main trip input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs
+caffeinate -dimsu python3 -m app.main trip input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs
 
 # Refresh trending audio manifests from configured provider
 python3 -m app.main refresh-trending-audio --limit 50
 
 # Process a single channel (auto-generates long-form for gopro channels)
-python3 -m app.main batch --channel krgd_vlogs --fast --max-clips 3
+caffeinate -dimsu python3 -m app.main batch --channel krgd_vlogs --fast --max-clips 3
 
 # Generate ONLY long-form videos (no shorts)
-python3 -m app.main longform --channel krgd_vlogs
+caffeinate -dimsu python3 -m app.main longform --channel krgd_vlogs
 
 # Long-form for a specific subfolder only
-python3 -m app.main longform --channel krgd_vlogs --subfolder 2026-05-14
+caffeinate -dimsu python3 -m app.main longform --channel krgd_vlogs --subfolder 2026-05-14
 
 # Long-form without social watermark
-python3 -m app.main longform --channel krgd_vlogs --no-overlay
+caffeinate -dimsu python3 -m app.main longform --channel krgd_vlogs --no-overlay
 
 # Process a single video for a channel
-python3 -m app.main process input/krgd_vlogs/trip_01/beach.mp4 --channel krgd_vlogs
+caffeinate -dimsu python3 -m app.main process input/krgd_vlogs/trip_01/beach.mp4 --channel krgd_vlogs
 
 # Batch with explicit directory
-python3 -m app.main batch input/tutorials/ --channel techie_krishna_kayaking
+caffeinate -dimsu python3 -m app.main batch input/tutorials/ --channel techie_krishna_kayaking
 
 # Watch a channel's input folder for new videos
-python3 -m app.main watch --channel krgd_vlogs --fast
+caffeinate -dimsu python3 -m app.main watch --channel krgd_vlogs --fast
 
 # Fast mode: uses tiny Whisper model + MPS GPU, ~2x faster
-python3 -m app.main process video.mp4 --channel krgd_vlogs --fast
+caffeinate -dimsu python3 -m app.main process video.mp4 --channel krgd_vlogs --fast
 ```
 
 ### Mixed-Media Vlog Workflow (Phone + Photos + GoPro)
@@ -348,8 +295,8 @@ Vlog Folder (videos + photos)
   +-> Merge outputs
   +-> Build scenic special-trip reel (4s scenic clips + transitions)
   +-> Create platform variants in folders:
-      - YT/    -> no background music
-      - insta/ -> add background music from assets/bgmusic/
+      - YT/    -> no background music (vlog-music: assets/bgmusic/yt)
+      - insta/ -> add background music from assets/bgmusic/ (vlog-music: assets/bgmusic/insta)
   +-> Optional: upload + trash cleanup
 ```
 
@@ -361,20 +308,39 @@ Vlog Folder (videos + photos)
 - **Watermark**: Social overlay fixed top-left, 22% width, 72% opacity throughout long-form
 - **Captions**: Auto-generated SRT + ASS for both long-form and all shorts
 - **Scenic Reel**: Per trip folder, scenic 4-second mini clips are auto-selected and merged with smooth fades
-- **Audio Split**: YT exports are clean (no added BGM), insta exports auto-mix BGM from `assets/bgmusic/`
+- **Audio Split**: YT exports keep clean source audio, insta exports auto-mix BGM from `assets/bgmusic/`. Use the `vlog-music` command to drop raw audio entirely and use background music on every output (YT: `assets/bgmusic/yt`, Insta: `assets/bgmusic/insta`).
 
 #### Usage
 
 ```bash
 # End-to-end workflow for any vlog folder
-python3 -m app.main vlog input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs
+caffeinate -dimsu python3 -m app.main vlog input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs
 
 # Skip upload while testing renders/exports
-python3 -m app.main vlog input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs --no-upload
+caffeinate -dimsu python3 -m app.main vlog input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs --no-upload
 
 # Fast mode (quick testing)
-python3 -m app.main vlog input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs --no-upload --fast
+caffeinate -dimsu python3 -m app.main vlog input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs --no-upload --fast
+
+# Music-only (drop raw audio): YT music from assets/bgmusic/yt, Insta music from assets/bgmusic/insta
+caffeinate -dimsu python3 -m app.main vlog-music input/krgd_vlogs/2026-05-30-Savandurga_NarashimaTemple_BigBanyanTree_RanganathTemple --channel krgd_vlogs --no-upload
 ```
+
+#### Music-Only Mode (`vlog-music`)
+
+For folders where you do **not** want the original recorded audio, use `vlog-music`.
+It runs the exact same workflow but replaces raw audio with background music on every output:
+
+| Output | Audio source |
+|---|---|
+| Long-form (YouTube) | `assets/bgmusic/yt` |
+| Shorts → YT folder | `assets/bgmusic/yt` |
+| Scenic highlight | `assets/bgmusic/yt` |
+| Shorts → insta folder | `assets/bgmusic/insta` |
+
+Drop your tracks (`.mp3/.wav/.m4a/.aac/.flac/.ogg`) into those two folders. If a folder is
+empty, it falls back to the general pool in `assets/bgmusic/`. Multiple tracks are rotated
+per clip; each clip also seeks a different offset so the music varies.
 
 #### Technical Details
 
@@ -457,7 +423,7 @@ Upload multiple videos automatically over 7 days at specific times per day:
 python3 -m app.main schedule output/tkk_live_shorts/ --channel tkk_live_shorts
 
 # Execute uploads when ready (runs at each scheduled time)
-python3 -m app.main execute-schedule
+caffeinate -dimsu python3 -m app.main execute-schedule
 
 # Then verify history and moved files
 cat temp/upload_history.json
@@ -501,7 +467,7 @@ source .venv/bin/activate
 #### 1. Test One Video (1 Short)
 
 ```bash
-python3 -m app.main process input/krgd_vlogs/2026-05-19/GH011251.MP4 \
+caffeinate -dimsu python3 -m app.main process input/krgd_vlogs/2026-05-19/GH011251.MP4 \
   --channel krgd_vlogs --max-clips 1 --no-upload
 ```
 
@@ -510,7 +476,7 @@ python3 -m app.main process input/krgd_vlogs/2026-05-19/GH011251.MP4 \
 #### 2. Test Fast Mode (Quick)
 
 ```bash
-python3 -m app.main process input/krgd_vlogs/2026-05-19/GH011251.MP4 \
+caffeinate -dimsu python3 -m app.main process input/krgd_vlogs/2026-05-19/GH011251.MP4 \
   --channel krgd_vlogs --max-clips 1 --no-upload --fast
 ```
 
@@ -519,7 +485,7 @@ python3 -m app.main process input/krgd_vlogs/2026-05-19/GH011251.MP4 \
 #### 3. Full Vlog Folder → Longform + Shorts (NO UPLOAD)
 
 ```bash
-python3 -m app.main vlog input/krgd_vlogs/2026-05-19 \
+caffeinate -dimsu python3 -m app.main vlog input/krgd_vlogs/2026-05-19 \
   --channel krgd_vlogs --no-upload
 ```
 
@@ -549,7 +515,7 @@ output/krgd_vlogs/
 #### 4. Full Vlog Folder + Upload
 
 ```bash
-python3 -m app.main vlog input/krgd_vlogs/2026-05-19 \
+caffeinate -dimsu python3 -m app.main vlog input/krgd_vlogs/2026-05-19 \
   --channel krgd_vlogs
 ```
 
@@ -558,7 +524,7 @@ python3 -m app.main vlog input/krgd_vlogs/2026-05-19 \
 #### 5. Batch Process All Vlog Subfolders
 
 ```bash
-python3 -m app.main batch --channel krgd_vlogs --no-upload
+caffeinate -dimsu python3 -m app.main batch --channel krgd_vlogs --no-upload
 ```
 
 **Processes:** All nested vlog subfolders in `input/krgd_vlogs/` using parallel longform + shorts workflow (no sequential waiting).
@@ -618,7 +584,7 @@ For **gopro** channels, the framework automatically generates long-form vlog com
 2. All clips within the subfolder are **sorted chronologically** (GoPro naming-aware: video number → chapter order)
 3. Clips are merged into a single continuous **16:9 landscape** video
 4. A **social branding watermark** is applied in the top-left corner (subtle, 15% width, 60% opacity)
-5. Output uses high-quality encoding (CRF 18, medium preset, AAC 192k)
+5. Output uses high-quality encoding (CRF 14, slower preset, AAC 320k)
 
 ### GoPro File Ordering
 
@@ -648,17 +614,17 @@ output/krgd_vlogs/
 
 ```bash
 # Generate long-form videos only (standalone)
-python3 -m app.main longform --channel krgd_vlogs
+caffeinate -dimsu python3 -m app.main longform --channel krgd_vlogs
 
 # Process a specific subfolder
-python3 -m app.main longform --channel krgd_vlogs --subfolder 2026-05-14
+caffeinate -dimsu python3 -m app.main longform --channel krgd_vlogs --subfolder 2026-05-14
 
 # Skip the social watermark overlay
-python3 -m app.main longform --channel krgd_vlogs --no-overlay
+caffeinate -dimsu python3 -m app.main longform --channel krgd_vlogs --no-overlay
 
 # batch and batch-all auto-trigger long-form for gopro channels
-python3 -m app.main batch --channel krgd_vlogs --fast --max-clips 3
-python3 -m app.main batch-all --fast --max-clips 3
+caffeinate -dimsu python3 -m app.main batch --channel krgd_vlogs --fast --max-clips 3
+caffeinate -dimsu python3 -m app.main batch-all --fast --max-clips 3
 ```
 
 ### Processing Report
@@ -710,7 +676,7 @@ Use the built-in CLI scheduling flow (`python3 -m app.main schedule` + `python3 
 python3 -m app.main schedule output/tkk_live_shorts/ --channel tkk_live_shorts
 
 # 2) Execute all pending uploads
-python3 -m app.main execute-schedule
+caffeinate -dimsu python3 -m app.main execute-schedule
 
 # 3) Verify moved files and upload history
 ls output/tkk_live_shorts/uploaded/
@@ -863,19 +829,19 @@ source .venv/bin/activate
 python3 -m app.main channels
 
 # ⚡ Process ALL channels at once (easiest — just put videos in folders and run)
-python3 -m app.main batch-all --fast --max-clips 3
+caffeinate -dimsu python3 -m app.main batch-all --fast --max-clips 3
 
 # Process a single channel only
-python3 -m app.main batch --channel krgd_vlogs --fast --max-clips 3
+caffeinate -dimsu python3 -m app.main batch --channel krgd_vlogs --fast --max-clips 3
 
 # Process a single video (specify channel for output routing)
-python3 -m app.main process input/krgd_vlogs/trip_01/beach.mp4 --channel krgd_vlogs --fast
+caffeinate -dimsu python3 -m app.main process input/krgd_vlogs/trip_01/beach.mp4 --channel krgd_vlogs --fast
 
 # Check video info first (no processing)
 python3 -m app.main info input/krgd_vlogs/trip_01/beach.mp4
 
 # Watch mode — auto-process new videos dropped into channel folder
-python3 -m app.main watch --channel krgd_vlogs --fast
+caffeinate -dimsu python3 -m app.main watch --channel krgd_vlogs --fast
 # Press Ctrl+C to stop
 
 # Upload a generated short (requires YouTube API setup — see below)
@@ -890,7 +856,7 @@ python3 -m app.main schedule output/krgd_vlogs/ --channel krgd_vlogs
 python3 -m app.main schedule output/krgd_vlogs/ --channel krgd_vlogs --interval 24
 
 # Execute all scheduled uploads (runs pending uploads, continues from last if re-run on day 6-7)
-python3 -m app.main execute-schedule
+caffeinate -dimsu python3 -m app.main execute-schedule
 
 # Uploaded files are moved to output/krgd_vlogs/uploaded/
 # Upload records are written to temp/upload_history.json
@@ -929,7 +895,7 @@ pip install --upgrade pip && pip install -r requirements.txt && pip install torc
 curl -L "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Bold.ttf" -o assets/fonts/Montserrat-Bold.ttf
 cp ~/Downloads/my_gopro.mp4 input/krgd_vlogs/trip_01/
 python3 -m app.main channels
-python3 -m app.main batch-all --fast --max-clips 3
+caffeinate -dimsu python3 -m app.main batch-all --fast --max-clips 3
 ```
 
 ---
@@ -1332,10 +1298,10 @@ video:
   output_width: 1080        # Output video width (pixels)
   output_height: 1920       # Output video height (pixels)
   fps: 30                   # Output frame rate
-  video_bitrate: "8M"       # Video bitrate
-  audio_bitrate: "192k"     # Audio bitrate
-  preset: "medium"          # Encoding speed (ultrafast → veryslow)
-  crf: 18                   # Quality (0=lossless, 23=default, 51=worst)
+  video_bitrate: "16M"      # Max bitrate ceiling (CPU uses CRF; this caps peaks)
+  audio_bitrate: "256k"     # Audio bitrate
+  preset: "slow"            # Encoding speed (ultrafast → veryslow; slower = better)
+  crf: 16                   # Quality (0=lossless, 23=default, 51=worst; lower = better)
 
 shorts:
   min_duration: 15          # Minimum clip length in seconds
@@ -1375,8 +1341,8 @@ trip:
   instagram_music_volume: 0.2    # Background music mix for Instagram export
   trending_audio_count: 100      # Max tracks to load from manifests/provider
   cleanup_after_upload: true     # Move generated files to trash after successful upload
-  output_width: 1920             # Long-form output width
-  output_height: 1080            # Long-form output height
+  output_width: 3840             # Long-form output width (4K)
+  output_height: 2160            # Long-form output height (4K)
   instagram_trending_manifest: "configs/trending_audio_instagram.json"
   youtube_trending_manifest: "configs/trending_audio_youtube.json"
   trending_provider:

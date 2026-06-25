@@ -16,10 +16,10 @@ class VideoConfig(BaseModel):
     fps: int = 30
     codec: str = "h264"
     audio_codec: str = "aac"
-    audio_bitrate: str = "192k"
-    video_bitrate: str = "8M"
-    preset: str = "medium"
-    crf: int = 18
+    audio_bitrate: str = "256k"
+    video_bitrate: str = "16M"
+    preset: str = "slow"
+    crf: int = 16
 
 
 class ShortsConfig(BaseModel):
@@ -107,8 +107,8 @@ class TripConfig(BaseModel):
     instagram_music_volume: float = 0.2
     trending_audio_count: int = 100
     cleanup_after_upload: bool = True
-    output_width: int = 1920
-    output_height: int = 1080
+    output_width: int = 3840
+    output_height: int = 2160
     instagram_trending_manifest: str = "configs/trending_audio_instagram.json"
     youtube_trending_manifest: str = "configs/trending_audio_youtube.json"
     trending_provider: TrendingProviderConfig = Field(default_factory=TrendingProviderConfig)

@@ -48,7 +48,7 @@ from app.utils.files import (
 )
 from app.utils.logging import console as rich_console, create_progress, get_logger, setup_logging
 from app.trending_audio_provider import TrendingAudioProvider
-from app.vlog_pipeline import create_platform_exports, create_trip_scenic_highlight, create_vlog_longform, discover_vlog_media
+from app.vlog_pipeline import apply_music_only_audio, create_platform_exports, create_trip_scenic_highlight, create_vlog_longform, discover_vlog_media
 
 app = typer.Typer(
     name="shorts-ai",
@@ -491,6 +491,7 @@ def _run_vlog_workflow(
     max_clips: Optional[int],
     fast: bool,
     no_upload: bool,
+    music_only: bool = False,
 ) -> None:
     """
     Full vlog workflow:
@@ -499,6 +500,10 @@ def _run_vlog_workflow(
     3) Generate long-form captions when long-form is ready.
     4) Export platform variants using standard audio workflow.
     5) Upload YouTube exports and move generated files to trash only after successful upload.
+
+    When ``music_only`` is True, raw audio is dropped from every output and
+    replaced with background music: YouTube outputs use ``assets/bgmusic/yt``
+    and Instagram outputs use ``assets/bgmusic/insta``.
     """
     _init()
     config = get_config()
@@ -531,6 +536,8 @@ def _run_vlog_workflow(
     rich_console.print(f"  Vlog folder: {vlog_folder}")
     rich_console.print(f"  Channel:     {ch_config.name} ({channel})")
     rich_console.print(f"  Long-form:   {longform_path}")
+    if music_only:
+        rich_console.print("  Audio:       [magenta]Music-only[/magenta] (YT: assets/bgmusic/yt, Insta: assets/bgmusic/insta)")
     rich_console.print("=" * 60)
 
     # Discover timeline metadata once; use it for both long-form and short-form flows.
@@ -606,6 +613,15 @@ def _run_vlog_workflow(
         + (f" ({short_errors} source video(s) failed)" if short_errors else "")
     )
 
+    # Music-only: replace long-form raw audio with the YouTube music pool.
+    if music_only:
+        if apply_music_only_audio(longform_result.output_path, bgm_subdir="yt"):
+            rich_console.print("  [magenta]Long-form audio replaced with YT background music.[/magenta]")
+        else:
+            rich_console.print(
+                "  [yellow]Long-form music swap skipped (no track in assets/bgmusic/yt).[/yellow]"
+            )
+
     # Step 3: Generate captions for long-form output
     rich_console.print("\n[bold]Step 3:[/bold] Generating long-form captions...")
     try:
@@ -643,7 +659,7 @@ def _run_vlog_workflow(
 
     # Step 4: Platform-specific exports
     rich_console.print("\n[bold]Step 4:[/bold] Creating platform exports...")
-    exports = create_platform_exports(short_clips=short_clips, output_dir=output_dir)
+    exports = create_platform_exports(short_clips=short_clips, output_dir=output_dir, music_only=music_only)
 
     rich_console.print(f"  YouTube exports:   {len(exports.youtube_exports)}")
     rich_console.print(f"  Instagram exports: {len(exports.instagram_exports)}")
@@ -674,6 +690,7 @@ def _run_vlog_workflow(
         socials_overlay_path=longform_overlay_path,
         title_text=vlog_folder.name,
         include_source_audio=False,
+        bgm_subdir="yt" if music_only else None,
     )
 
     if scenic_clip:
@@ -760,6 +777,30 @@ def vlog(
         max_clips=max_clips,
         fast=fast,
         no_upload=no_upload,
+    )
+
+
+@app.command(name="vlog-music")
+def vlog_music(
+    vlog_folder: Path = typer.Argument(..., help="Vlog folder to process with music-only audio (no raw audio)."),
+    channel: str = typer.Option(..., "--channel", "-c", help="Channel name from config."),
+    max_clips: Optional[int] = typer.Option(None, "--max-clips", "-n", help="Maximum clips to generate from long-form."),
+    fast: bool = typer.Option(False, "--fast", "-f", help="Fast mode for shorts generation."),
+    no_upload: bool = typer.Option(False, "--no-upload", help="Skip YouTube uploads."),
+) -> None:
+    """Music-only vlog workflow: drop raw audio, use background music for every output.
+
+    YouTube outputs (long-form, shorts, scenic) pull music from assets/bgmusic/yt;
+    Instagram reels pull music from assets/bgmusic/insta. Use this for folders where
+    you do not want the original recorded audio.
+    """
+    _run_vlog_workflow(
+        vlog_folder=vlog_folder,
+        channel=channel,
+        max_clips=max_clips,
+        fast=fast,
+        no_upload=no_upload,
+        music_only=True,
     )
 
 
