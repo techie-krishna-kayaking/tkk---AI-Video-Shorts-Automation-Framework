@@ -48,7 +48,7 @@ from app.utils.files import (
 )
 from app.utils.logging import console as rich_console, create_progress, get_logger, setup_logging
 from app.trending_audio_provider import TrendingAudioProvider
-from app.vlog_pipeline import apply_music_only_audio, create_platform_exports, create_trip_scenic_highlight, create_vlog_longform, discover_vlog_media
+from app.vlog_pipeline import apply_music_only_audio, create_platform_exports, create_vlog_longform, discover_vlog_media
 
 app = typer.Typer(
     name="shorts-ai",
@@ -677,28 +677,7 @@ def _run_vlog_workflow(
         output=str(output_dir),
     )
 
-    # Step 5: Trip-level scenic highlight reel (4s scenic clips + transitions)
-    rich_console.print("\n[bold]Step 5:[/bold] Creating trip scenic highlight...")
-    scenic_dir = output_dir / "special_trip"
-    scenic_dir.mkdir(parents=True, exist_ok=True)
-    scenic_output = scenic_dir / f"{sanitize_filename(vlog_folder.name)}_scenic_highlight.mp4"
-    scenic_clip = create_trip_scenic_highlight(
-        trip_folder=vlog_folder,
-        ordered_videos=source_videos,
-        output_path=scenic_output,
-        clip_duration=4.0,
-        socials_overlay_path=longform_overlay_path,
-        title_text=vlog_folder.name,
-        include_source_audio=False,
-        bgm_subdir="yt" if music_only else None,
-    )
-
-    if scenic_clip:
-        rich_console.print(f"  Scenic highlight: {scenic_clip.name}")
-    else:
-        rich_console.print("  [yellow]Scenic highlight skipped (not enough scenic candidates).[/yellow]")
-
-    # Step 6: Optional upload + cleanup
+    # Step 5: Optional upload + cleanup
     if no_upload:
         rich_console.print("\n[bold yellow]Upload skipped due to --no-upload.[/bold yellow]")
         return
@@ -707,7 +686,7 @@ def _run_vlog_workflow(
         rich_console.print("\n[bold yellow]Upload skipped (upload_enabled=false for channel).[/bold yellow]")
         return
 
-    rich_console.print("\n[bold]Step 6:[/bold] Uploading YouTube exports...")
+    rich_console.print("\n[bold]Step 5:[/bold] Uploading YouTube exports...")
     logger.info("upload_started", channel=channel, count=len(exports.youtube_exports))
 
     uploader = YouTubeUploader(channel)
@@ -736,15 +715,13 @@ def _run_vlog_workflow(
         rich_console.print(f"  [green]Uploaded:[/green] {success_count}/{len(upload_results)}")
 
         if config.trip.cleanup_after_upload:
-            rich_console.print("\n[bold]Step 7:[/bold] Moving generated files to trash...")
+            rich_console.print("\n[bold]Step 6:[/bold] Moving generated files to trash...")
             generated_files = [
                 longform_result.output_path,
                 *exports.source_shorts,
                 *exports.youtube_exports,
                 *exports.instagram_exports,
             ]
-            if scenic_clip:
-                generated_files.append(scenic_clip)
             moved, errors = move_files_to_trash(generated_files)
             rich_console.print(f"  Moved to trash: {len(moved)}")
             if errors:
@@ -790,7 +767,7 @@ def vlog_music(
 ) -> None:
     """Music-only vlog workflow: drop raw audio, use background music for every output.
 
-    YouTube outputs (long-form, shorts, scenic) pull music from assets/bgmusic/yt;
+    YouTube outputs (long-form, shorts) pull music from assets/bgmusic/yt;
     Instagram reels pull music from assets/bgmusic/insta. Use this for folders where
     you do not want the original recorded audio.
     """

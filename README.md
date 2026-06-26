@@ -208,7 +208,7 @@ assets/social/                   ← Per-channel socials overlays
 
 assets/bgmusic/                  ← Background music tracks
 ├── *.mp3                        ← Default pool (insta auto-mix in normal vlog runs)
-├── yt/                          ← YouTube music for `vlog-music` (long-form, shorts, scenic)
+├── yt/                          ← YouTube music for `vlog-music` (long-form + shorts)
 └── insta/                       ← Instagram music for `vlog-music` reels
 ```
 
@@ -286,14 +286,14 @@ Vlog Folder (videos + photos)
   |
   +-> [PARALLEL THREAD 1]              [PARALLEL THREAD 2]
   |   Build long-form video            Process source videos -> shorts
-  |   - Chronological ordering          - Motion/scene detection
-  |   - Normalize segments              - Clip selection (min 15s)
-  |   - Apply watermark overlay         - Render with overlays
-  |   - Generate SRT + ASS captions     - Generate SRT + ASS captions
-  |   (full media duration)             (independent of long-form)
+  |   - Chronological ordering          - Fixed 30s segments (0-30, 30-60, ...)
+  |   - Normalize segments              - No motion/scene detection
+  |     (blur only for non-16:9)        - Center layout (white bars)
+  |   - Social overlay (top-right)       - Caption + CTA + social (bottom)
+  |   - Generate SRT + ASS captions     (independent of long-form)
+  |   (full media duration)
   |
   +-> Merge outputs
-  +-> Build scenic special-trip reel (4s scenic clips + transitions)
   +-> Create platform variants in folders:
       - YT/    -> no background music (vlog-music: assets/bgmusic/yt)
       - insta/ -> add background music from assets/bgmusic/ (vlog-music: assets/bgmusic/insta)
@@ -304,10 +304,10 @@ Vlog Folder (videos + photos)
 
 - **Parallel Execution**: Long-form and shorts render in separate worker threads simultaneously
 - **Fast Assembly**: Long-form uses FFmpeg stream copy concat (no re-encode)
-- **Aspect Ratio Preservation**: Mixed orientations centered with soft blurred background (no stretch/crop)
-- **Watermark**: Social overlay fixed top-left, 22% width, 72% opacity throughout long-form
+- **Aspect Ratio Preservation**: 16:9 sources are kept at full frame (no blur); only non-16:9 media gets the soft blurred-background pillarbox (no stretch/crop)
+- **Watermark**: Social overlay fixed top-right, 22% width, 88% opacity throughout long-form
+- **Shorts**: Source videos are sliced into back-to-back 30s segments (0-30, 30-60, ...) with no motion/scene detection; centered with white bars + caption/CTA/social
 - **Captions**: Auto-generated SRT + ASS for both long-form and all shorts
-- **Scenic Reel**: Per trip folder, scenic 4-second mini clips are auto-selected and merged with smooth fades
 - **Audio Split**: YT exports keep clean source audio, insta exports auto-mix BGM from `assets/bgmusic/`. Use the `vlog-music` command to drop raw audio entirely and use background music on every output (YT: `assets/bgmusic/yt`, Insta: `assets/bgmusic/insta`).
 
 #### Usage
@@ -335,7 +335,6 @@ It runs the exact same workflow but replaces raw audio with background music on 
 |---|---|
 | Long-form (YouTube) | `assets/bgmusic/yt` |
 | Shorts → YT folder | `assets/bgmusic/yt` |
-| Scenic highlight | `assets/bgmusic/yt` |
 | Shorts → insta folder | `assets/bgmusic/insta` |
 
 Drop your tracks (`.mp3/.wav/.m4a/.aac/.flac/.ogg`) into those two folders. If a folder is
@@ -492,7 +491,7 @@ caffeinate -dimsu python3 -m app.main vlog input/krgd_vlogs/2026-05-19 \
 **Processing Steps (PARALLEL):**
 1. Discovers all media (videos + photos) by timestamp
 2. **PARALLEL: Build long-form** (segment normalization + concat)
-3. **PARALLEL: Process source videos** → shorts (motion detection + clip selection)
+3. **PARALLEL: Process source videos** → shorts (fixed 30s segments, no detection)
 4. Generate long-form SRT + ASS captions
 5. Creates YouTube + Instagram variants (standard audio, no mixing)
 6. Outputs to `output/krgd_vlogs/`

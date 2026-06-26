@@ -278,6 +278,15 @@ def _has_audio_stream(video_path: Path) -> bool:
     return any(stream.get("codec_type") == "audio" for stream in info.get("streams", []))
 
 
+def _get_video_dimensions(video_path: Path) -> tuple[int, int]:
+    """Return the (width, height) of the first video stream, or (0, 0)."""
+    info = probe_video(video_path)
+    for stream in info.get("streams", []):
+        if stream.get("codec_type") == "video":
+            return int(stream.get("width") or 0), int(stream.get("height") or 0)
+    return 0, 0
+
+
 def _normalize_video_segment(
     item: MediaItem,
     output_path: Path,
@@ -287,25 +296,40 @@ def _normalize_video_segment(
     blur_bg: bool,
     overlay_path: Path | None = None,
 ) -> None:
-    filter_complex = (
-        f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase"
-        + (",boxblur=40:20" if blur_bg else "")
-        + f",crop={width}:{height}[bg];"
-        f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease[fg];"
-        "[bg][fg]overlay=(W-w)/2:(H-h)/2[vbase]"
-    )
+    src_w, src_h = _get_video_dimensions(item.path)
+    target_ar = (width / height) if height else 0.0
+    src_ar = (src_w / src_h) if src_h else target_ar
+    # Skip the blurred-background pillarbox when the source already matches the
+    # output aspect ratio (e.g. 16:9 GoPro footage -> 16:9 4K). A plain
+    # scale-to-fit preserves the raw frame and avoids two extra scales + boxblur.
+    aspect_matches = target_ar > 0 and abs(src_ar - target_ar) <= 0.02
+
+    if aspect_matches:
+        filter_complex = (
+            f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1[vbase]"
+        )
+    else:
+        filter_complex = (
+            f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase"
+            + (",boxblur=40:20" if blur_bg else "")
+            + f",crop={width}:{height}[bg];"
+            f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease[fg];"
+            "[bg][fg]overlay=(W-w)/2:(H-h)/2[vbase]"
+        )
 
     cmd = ["ffmpeg", "-y", "-i", str(item.path)]
     has_overlay = overlay_path is not None and overlay_path.exists()
     if has_overlay:
         cmd.extend(["-i", str(overlay_path)])
         overlay_w = max(120, int(width * 0.22))
+        # Socials watermark sits in the TOP-RIGHT corner (40px margin).
         filter_complex += (
             f";[1:v]scale={overlay_w}:-1,format=rgba,colorchannelmixer=aa=0.88[wm]"
             f";[wm]split=2[wm_main][wm_glow_src]"
             f";[wm_glow_src]gblur=sigma=10,colorchannelmixer=aa=0.55[wm_glow]"
-            f";[vbase][wm_glow]overlay=40:40[vtmp]"
-            f";[vtmp][wm_main]overlay=40:40[vout]"
+            f";[vbase][wm_glow]overlay=W-w-40:40[vtmp]"
+            f";[vtmp][wm_main]overlay=W-w-40:40[vout]"
         )
     else:
         filter_complex += ";[vbase]copy[vout]"
@@ -320,12 +344,15 @@ def _normalize_video_segment(
             "-map", "[aout]",
         ])
     else:
+        # Silent source: append an anullsrc track. Its input index depends on
+        # whether the overlay image already occupies input slot 1.
+        anull_idx = 2 if has_overlay else 1
         cmd.extend([
             "-f", "lavfi",
             "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
             "-filter_complex", filter_complex,
             "-map", "[vout]",
-            "-map", "1:a",
+            "-map", f"{anull_idx}:a",
             "-shortest",
         ])
 
@@ -392,8 +419,8 @@ def _normalize_photo_segment(
             f";[2:v]scale={overlay_w}:-1,format=rgba,colorchannelmixer=aa=0.88[wm]"
             f";[wm]split=2[wm_main][wm_glow_src]"
             f";[wm_glow_src]gblur=sigma=10,colorchannelmixer=aa=0.55[wm_glow]"
-            f";[vbase][wm_glow]overlay=40:40[vtmp]"
-            f";[vtmp][wm_main]overlay=40:40[vout]"
+            f";[vbase][wm_glow]overlay=W-w-40:40[vtmp]"
+            f";[vtmp][wm_main]overlay=W-w-40:40[vout]"
         )
     else:
         filter_complex += ";[vbase]copy[vout]"

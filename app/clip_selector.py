@@ -96,9 +96,62 @@ class ClipSelector:
         if video_info.category == VideoCategory.VERTICAL:
             return self._select_vertical_clips(video_path, video_info)
         elif video_info.category == VideoCategory.GOPRO:
-            return self._select_gopro_clips(video_path, video_info)
+            # GoPro/vlog shorts are simple back-to-back fixed-length segments
+            # (0-30, 30-60, ...). No motion/scene detection is performed.
+            return self._select_fixed_segments(video_info, max_clips=max_clips)
         else:
             return self._select_tutorial_clips(video_path, video_info, max_clips)
+
+    def _select_fixed_segments(
+        self,
+        video_info: VideoInfo,
+        segment_seconds: float = 30.0,
+        min_tail: float = 10.0,
+        max_clips: int | None = None,
+    ) -> ClipSelection:
+        """Cut the source into consecutive fixed-length segments.
+
+        Starting at 0:00 the video is sliced into back-to-back
+        ``segment_seconds`` clips (0-30, 30-60, ...). No motion, scene, speech,
+        or silence detection is performed. A trailing partial clip is kept only
+        when it is at least ``min_tail`` seconds long.
+        """
+        duration = float(video_info.duration)
+        clips: list[Clip] = []
+        start = 0.0
+        while start < duration - 0.05:
+            end = min(start + segment_seconds, duration)
+            length = end - start
+            # Drop a too-short tail, but always keep at least one clip.
+            if length < min_tail and clips:
+                break
+            clips.append(
+                Clip(
+                    start=round(start, 3),
+                    end=round(end, 3),
+                    duration=round(length, 3),
+                    has_speech=False,
+                    tags=["fixed-segment"],
+                )
+            )
+            start = end
+
+        if max_clips:
+            clips = clips[:max_clips]
+
+        logger.info(
+            "fixed_segments_selected",
+            count=len(clips),
+            segment_seconds=segment_seconds,
+            duration=f"{duration:.1f}s",
+        )
+
+        return ClipSelection(
+            clips=clips,
+            total_candidates=len(clips),
+            selected_count=len(clips),
+            video_info=video_info,
+        )
 
     def _select_tutorial_clips(
         self,
