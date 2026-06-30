@@ -151,7 +151,7 @@ caffeinate -dimsu python3 -m app.main vlog "input/krgd_vlogs/test_short" --chann
 caffeinate -dimsu python3 -m app.main vlog-music "input/krgd_vlogs/<FOLDER_NAME>" --channel krgd_vlogs --no-upload
 
 # ── Schedule + upload (7-day spread) ───────────────────────
-python3 -m app.main schedule output/krgd_vlogs/ --channel krgd_vlogs
+python3 -m app.main schedule output/krgd_vlogs/yt --channel krgd_vlogs
 python3 -m app.main schedule output/krishna_kayaking/ --channel krishna_kayaking
 python3 -m app.main schedule output/techie_krishna_kayaking/ --channel techie_krishna_kayaking
 python3 -m app.main schedule output/tkk_live_shorts/ --channel tkk_live_shorts
