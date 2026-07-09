@@ -2,7 +2,9 @@
 Schedule YouTube uploads for all channels.
 
 Rules:
-- Shorts: 3 per day for 3 days at 3:07 PM, 5:07 PM, 7:07 PM (local time)
+- Shorts: published per each channel's `youtube.schedule_times`,
+  `schedule_timezone`, and `schedule_duration_days` from configs/channels.yaml
+  (falls back to the module defaults below when unset).
 - Long-form: 1 every Thursday at 7:07 PM (if available)
 - Sequential order by filename
 - Title = filename stem (cleaned up)
@@ -184,12 +186,45 @@ def clean_title(filename_stem: str) -> str:
     return title
 
 
-def get_shorts_schedule(start_date: datetime) -> list[datetime]:
-    """Generate publish times for shorts over the next N days."""
+def _resolve_schedule_tz(tz_name: str | None) -> ZoneInfo:
+    """Resolve a channel's schedule timezone, falling back to LOCAL_TZ."""
+    if tz_name:
+        try:
+            return ZoneInfo(tz_name)
+        except Exception:
+            logger.warning("invalid_schedule_timezone", timezone=tz_name, fallback=str(LOCAL_TZ))
+    return LOCAL_TZ
+
+
+def _parse_schedule_times(times: list[str] | None) -> list[tuple[int, int]]:
+    """Parse ["HH:MM", ...] strings into sorted (hour, minute) tuples.
+
+    Falls back to the module default SHORTS_TIMES when none are valid.
+    """
+    parsed: list[tuple[int, int]] = []
+    for entry in times or []:
+        try:
+            hh, mm = str(entry).strip().split(":")
+            parsed.append((int(hh), int(mm)))
+        except (ValueError, AttributeError):
+            continue
+    return sorted(parsed) if parsed else list(SHORTS_TIMES)
+
+
+def get_shorts_schedule(
+    start_date: datetime,
+    times: list[tuple[int, int]] | None = None,
+    days: int = SHORTS_DAYS,
+) -> list[datetime]:
+    """Generate publish times for shorts over the next ``days`` days.
+
+    ``times`` is a list of (hour, minute) slots per day; defaults to SHORTS_TIMES.
+    """
+    slots = sorted(times) if times else list(SHORTS_TIMES)
     schedule = []
-    for day_offset in range(SHORTS_DAYS):
+    for day_offset in range(days):
         day = start_date + timedelta(days=day_offset + 1)  # Start tomorrow
-        for hour, minute in SHORTS_TIMES:
+        for hour, minute in slots:
             publish_at = day.replace(hour=hour, minute=minute, second=0, microsecond=0)
             schedule.append(publish_at)
     return schedule
@@ -242,7 +277,13 @@ def schedule_channel(channel_name: str, dry_run: bool = True, history: dict | No
     hashtags_longform = CHANNEL_HASHTAGS_LONGFORM.get(channel_name, "")
     default_tags = channel_config.youtube.default_tags if channel_config.youtube else []
 
-    now = datetime.now(LOCAL_TZ)
+    # Per-channel schedule settings from configs/channels.yaml (with fallbacks).
+    yt = channel_config.youtube
+    channel_tz = _resolve_schedule_tz(getattr(yt, "schedule_timezone", None) if yt else None)
+    channel_times = _parse_schedule_times(getattr(yt, "schedule_times", None) if yt else None)
+    channel_days = int((getattr(yt, "schedule_duration_days", None) if yt else None) or SHORTS_DAYS)
+
+    now = datetime.now(channel_tz)
 
     # Use the last scheduled end date to avoid overlaps
     # If previous run scheduled up to Jun 5, next run starts from Jun 5
@@ -259,7 +300,7 @@ def schedule_channel(channel_name: str, dry_run: bool = True, history: dict | No
     print(f"  Long-form available: {len(longforms)} (skipped {skipped_lf} already uploaded)")
 
     # --- Schedule Shorts ---
-    shorts_times = get_shorts_schedule(start_from)
+    shorts_times = get_shorts_schedule(start_from, channel_times, channel_days)
     shorts_to_schedule = shorts[: len(shorts_times)]  # Cap at available slots
 
     print(f"\n  Shorts Schedule ({len(shorts_to_schedule)} videos):")
@@ -341,8 +382,7 @@ def main():
     print("=" * 64)
     print(f" Mode: {'DRY RUN (preview)' if dry_run else 'EXECUTING UPLOADS'}")
     print(f" Date: {datetime.now(LOCAL_TZ).strftime('%a %b %d, %Y %I:%M %p %Z')}")
-    print(f" Schedule: {SHORTS_PER_DAY} shorts/day × {SHORTS_DAYS} days")
-    print(f"           Times: {', '.join(f'{h}:{m:02d}' for h, m in SHORTS_TIMES)}")
+    print(f" Schedule: per-channel (youtube.schedule_times / schedule_timezone / schedule_duration_days in channels.yaml)")
     print(f"           Long-form: Thursdays at {LONGFORM_TIME[0]}:{LONGFORM_TIME[1]:02d}")
     print(f" History:  {UPLOAD_HISTORY_FILE}")
     print("=" * 64)

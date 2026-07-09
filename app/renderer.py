@@ -113,21 +113,22 @@ class Renderer:
             lines.append(current)
         return lines
 
-    def _generate_header_image(self, text: str, hook_text: str = "", width: int = 1080, height: int = 300) -> Path:
+    def _generate_header_image(self, text: str, hook_text: str = "", width: int = 1080, height: int = 380) -> Path:
         """Generate a transparent PNG with clip name (auto-wrapped/auto-shrunk) at top."""
         img = Image.new("RGBA", (width, height), (255, 255, 255, 0))
         draw = ImageDraw.Draw(img)
 
         font_path = Path("assets/fonts/Montserrat-Bold.ttf")
-        display_text = hook_text.strip() if hook_text else ""
+        # Title is shown in ALL CAPS, larger, across up to 3 lines.
+        display_text = hook_text.strip().upper() if hook_text else ""
 
         if display_text:
-            max_text_width = width - 80  # 40px padding each side
+            max_text_width = width - 60  # 30px padding each side
             lines: list[str] = [display_text]
             chosen_font = None
 
-            # Try decreasing font sizes until the text fits in at most 2 lines.
-            for font_size in (40, 36, 32, 28, 26, 24, 22):
+            # Try decreasing font sizes until the text fits in at most 3 lines.
+            for font_size in (72, 66, 60, 54, 50, 46, 42, 38):
                 try:
                     font = ImageFont.truetype(str(font_path), font_size) if font_path.exists() else ImageFont.load_default()
                 except Exception:
@@ -135,21 +136,21 @@ class Renderer:
                 wrapped = self._wrap_text_to_width(draw, display_text, font, max_text_width)
                 chosen_font = font
                 lines = wrapped
-                if len(wrapped) <= 2:
+                if len(wrapped) <= 3:
                     break
 
             if chosen_font is None:
                 chosen_font = ImageFont.load_default()
 
-            # Cap to 2 lines, adding an ellipsis if the title is extremely long.
-            if len(lines) > 2:
-                lines = lines[:2]
-                lines[1] = lines[1].rstrip(".") + "…"
+            # Cap to 3 lines, adding an ellipsis if the title is extremely long.
+            if len(lines) > 3:
+                lines = lines[:3]
+                lines[2] = lines[2].rstrip(".") + "…"
 
             line_heights = [draw.textbbox((0, 0), ln, font=chosen_font)[3] - draw.textbbox((0, 0), ln, font=chosen_font)[1] for ln in lines]
-            gap = 8
+            gap = 12
             total_h = sum(line_heights) + gap * (len(lines) - 1)
-            y = max(16, (160 - total_h) // 2)
+            y = max(16, (height - total_h) // 2)
             for i, ln in enumerate(lines):
                 bb = draw.textbbox((0, 0), ln, font=chosen_font)
                 tw = bb[2] - bb[0]
@@ -165,27 +166,30 @@ class Renderer:
         self._temp_files.append(header_path)
         return header_path
 
-    def _generate_cta_image(self, width: int = 1080, height: int = 170) -> Path:
-        """Generate a single-line CTA PNG: 'WATCH THE FULL VIDEO on' + YouTube logo."""
+    def _generate_cta_image(self, width: int = 1080, height: int = 270) -> Path:
+        """Generate a 2-line CTA PNG: 'WATCH THE FULL VIDEO' / 'on' + YouTube logo (large)."""
         img = Image.new("RGBA", (width, height), (255, 255, 255, 0))
         draw = ImageDraw.Draw(img)
 
         font_path = Path("assets/fonts/Montserrat-Bold.ttf")
         try:
-            font = ImageFont.truetype(str(font_path), 46) if font_path.exists() else ImageFont.load_default()
+            font = ImageFont.truetype(str(font_path), 76) if font_path.exists() else ImageFont.load_default()
         except Exception:
             font = ImageFont.load_default()
 
-        text = "WATCH THE FULL VIDEO on"
-        tb = draw.textbbox((0, 0), text, font=font)
-        tw = tb[2] - tb[0]
-        th = tb[3] - tb[1]
+        line1 = "WATCH THE FULL VIDEO"
+        line2_text = "on"
 
-        # Load YouTube logo to sit right after the text.
+        b1 = draw.textbbox((0, 0), line1, font=font)
+        l1w, l1h = b1[2] - b1[0], b1[3] - b1[1]
+        b2 = draw.textbbox((0, 0), line2_text, font=font)
+        l2tw, l2th = b2[2] - b2[0], b2[3] - b2[1]
+
+        # Load YouTube logo (larger) to sit right after the 'on' on line 2.
         logo_path = Path("assets/overlays/Logo_of_YouTube.png")
         logo = None
         logo_w = 0
-        logo_h = 70
+        logo_h = 118
         if logo_path.exists():
             try:
                 logo = Image.open(str(logo_path)).convert("RGBA")
@@ -196,18 +200,25 @@ class Renderer:
                 logo = None
                 logo_w = 0
 
-        gap = 18
-        total_w = tw + (gap + logo_w if logo else 0)
-        x = (width - total_w) // 2
-        row_h = max(th, logo_h)
-        row_top = (height - row_h) // 2
+        gap = 22
+        row_gap = 16
+        line2_h = max(l2th, logo_h)
+        total_h = l1h + row_gap + line2_h
+        y = (height - total_h) // 2
 
-        y_text = row_top + (row_h - th) // 2 - tb[1]
-        draw.text((x, y_text), text, fill=(255, 0, 0, 255), font=font)
+        # Line 1 centered.
+        x1 = (width - l1w) // 2
+        draw.text((x1, y - b1[1]), line1, fill=(255, 0, 0, 255), font=font)
 
+        # Line 2 centered: 'on' text + YouTube logo.
+        y2 = y + l1h + row_gap
+        total_w2 = l2tw + (gap + logo_w if logo else 0)
+        x2 = (width - total_w2) // 2
+        y_text2 = y2 + (line2_h - l2th) // 2 - b2[1]
+        draw.text((x2, y_text2), line2_text, fill=(255, 0, 0, 255), font=font)
         if logo:
-            logo_x = x + tw + gap
-            logo_y = row_top + (row_h - logo_h) // 2
+            logo_x = x2 + l2tw + gap
+            logo_y = y2 + (line2_h - logo_h) // 2
             img.paste(logo, (logo_x, logo_y), logo)
 
         tmp_dir = Path(tempfile.gettempdir()) / "shorts_render"
@@ -464,9 +475,9 @@ class Renderer:
 
                 # CTA image (text + YouTube logo) overlaid above the socials.
                 if cta_input_idx is not None:
-                    cta_scale = f"[{cta_input_idx}:v]scale={int(self.output_width * 0.58)}:-1[ctaimg]"
+                    cta_scale = f"[{cta_input_idx}:v]scale={int(self.output_width * 0.76)}:-1[ctaimg]"
                     filters.append(cta_scale)
-                    cta_overlay = f"{current_stream}[ctaimg]overlay=(W-w)/2:H-h-260[ctad]"
+                    cta_overlay = f"{current_stream}[ctaimg]overlay=(W-w)/2:H-h-350[ctad]"
                     filters.append(cta_overlay)
                     current_stream = "[ctad]"
 
@@ -569,7 +580,7 @@ class Renderer:
         # Add overlay image at bottom (social footer)
         if job.overlay_path and job.overlay_path.exists() and overlay_input_idx is not None:
             overlay_scale = (
-                f"[{overlay_input_idx}:v]scale={int(self.output_width * 0.48)}:-1[ovl]"
+                f"[{overlay_input_idx}:v]scale={int(self.output_width * 0.96)}:-1[ovl]"
             )
             filters.append(overlay_scale)
             overlay_filter = (

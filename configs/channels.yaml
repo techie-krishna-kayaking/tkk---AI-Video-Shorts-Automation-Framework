@@ -33,6 +33,13 @@ channels:
       schedule_delay_hours: 48
       schedule_timezone: "Asia/Kolkata"
       schedule_times:
+        - "00:07"
+        - "01:07"
+        - "02:07"
+        - "03:07"
+        - "04:07"
+        - "05:07"
+        - "06:07"
         - "07:07"
         - "08:07"
         - "09:07"
@@ -47,8 +54,10 @@ channels:
         - "18:07"
         - "19:07"
         - "20:07"
-        - "21:07" 
-      schedule_duration_days: 10
+        - "21:07"
+        - "22:07"
+        - "23:07"
+      schedule_duration_days: 3
 
   techie_krishna_kayaking:
     name: "techie krishna kayaking"
