@@ -88,11 +88,15 @@ channels:
       default_category: "28"
       privacy_status: "private"
       schedule_delay_hours: 24
+      schedule_timezone: "Asia/Kolkata"
       schedule_times:
-        - "07:37"
-        - "09:37"
-        - "11:37"
-        - "15:37"
+        - "09:07"
+        - "11:07"
+        - "13:07"
+        - "15:07"
+        - "17:07"
+        - "19:07"
+        - "21:07"
       schedule_duration_days: 10
       auto_upload_captions: true
       monetization_enabled: true
