@@ -139,9 +139,9 @@ caffeinate -dimsu python3 -m app.main batch-all --fast           # quick test pa
 
 # ── Render a SINGLE channel ────────────────────────────────
 caffeinate -dimsu python3 -m app.main batch --channel krgd_vlogs               # vlog: longform + shorts (parallel)
-caffeinate -dimsu python3 -m app.main batch --channel techie_krishna_kayaking --max-clips 108
+caffeinate -dimsu python3 -m app.main batch --channel techie_krishna_kayaking  --fast
 caffeinate -dimsu python3 -m app.main batch --channel krishna_kayaking --max-clips 108
-caffeinate -dimsu python3 -m app.main batch --channel tkk_live_shorts --max-clips 108
+caffeinate -dimsu python3 -m app.main batch --channel tkk_live_shorts --fast
 
 # ── Render a SINGLE folder / quick test ────────────────────
 caffeinate -dimsu python3 -m app.main vlog "input/krgd_vlogs/<FOLDER_NAME>" --channel krgd_vlogs --no-upload
