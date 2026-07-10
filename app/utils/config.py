@@ -107,8 +107,8 @@ class TripConfig(BaseModel):
     instagram_music_volume: float = 0.2
     trending_audio_count: int = 100
     cleanup_after_upload: bool = True
-    output_width: int = 3840
-    output_height: int = 2160
+    output_width: int = 2560
+    output_height: int = 1440
     instagram_trending_manifest: str = "configs/trending_audio_instagram.json"
     youtube_trending_manifest: str = "configs/trending_audio_youtube.json"
     trending_provider: TrendingProviderConfig = Field(default_factory=TrendingProviderConfig)
@@ -144,6 +144,37 @@ class ChannelConfig(BaseModel):
     youtube: YouTubeChannelConfig = Field(default_factory=YouTubeChannelConfig)
 
 
+class OverlayItemConfig(BaseModel):
+    """A single stacked overlay image (position/size are frame-relative)."""
+    image: str = ""
+    width_frac: float = 0.3   # width as a fraction of the output frame width
+    margin_top: int = 0       # extra vertical spacing above this item (px)
+
+
+class ShortsOverlayConfig(BaseModel):
+    """Overlay layout + segmentation for tutorial-style shorts.
+
+    Coordinates are computed from these values so nothing is hardcoded in the
+    renderer. All px values are for the baseline 1080-wide frame and are scaled
+    proportionally for other output widths.
+    """
+    segment_seconds: float = 27.0  # length of each content segment (outro appended after)
+    min_tail_seconds: float = 2.0  # keep a trailing segment only if at least this long
+    outro_path: str = "assets/social/tkk-shorts-outro1.mp4"
+    safe_margin: int = 20          # left/top inset for stacked overlays (px)
+    overlay_padding: int = 15      # vertical gap between stacked overlays (px)
+    boundary_fraction: float = 0.65  # slide/face divider position (fraction of height)
+    social_icons: OverlayItemConfig = Field(
+        default_factory=lambda: OverlayItemConfig(image="assets/social/tkk_socials.png", width_frac=0.34)
+    )
+    topmate: OverlayItemConfig = Field(
+        default_factory=lambda: OverlayItemConfig(image="assets/social/tkk-topamte-color.png", width_frac=0.42, margin_top=15)
+    )
+    website: OverlayItemConfig = Field(
+        default_factory=lambda: OverlayItemConfig(image="assets/social/tkk-website.png", width_frac=0.52)
+    )
+
+
 class AppConfig(BaseModel):
     """Main application configuration."""
 
@@ -158,6 +189,7 @@ class AppConfig(BaseModel):
     input: InputConfig = Field(default_factory=InputConfig)
     assets: AssetsConfig = Field(default_factory=AssetsConfig)
     trip: TripConfig = Field(default_factory=TripConfig)
+    shorts_overlay: ShortsOverlayConfig = Field(default_factory=ShortsOverlayConfig)
     channels: dict[str, ChannelConfig] = Field(default_factory=dict)
 
 

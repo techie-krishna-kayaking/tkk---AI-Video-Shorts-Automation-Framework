@@ -21,6 +21,18 @@ from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Voice-cleanup audio chain applied to spoken shorts content (reused across the
+# standard and tutorial render paths).
+SHORTS_AUDIO_FILTER = (
+    "highpass=f=80,"
+    "lowpass=f=9000,"
+    "afftdn=nf=-20,"
+    "equalizer=f=220:t=q:w=1.1:g=-2,"
+    "equalizer=f=2800:t=q:w=1.0:g=2,"
+    "acompressor=threshold=0.09:ratio=2.2:attack=15:release=220:makeup=3,"
+    "alimiter=limit=0.96"
+)
+
 
 @dataclass
 class RenderJob:
@@ -284,7 +296,11 @@ class Renderer:
         job.output_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
-            cmd = self._build_ffmpeg_command(job)
+            cmd = (
+                self._build_tutorial_ffmpeg_command(job)
+                if job.channel_type == "tutorial"
+                else self._build_ffmpeg_command(job)
+            )
             result = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -397,19 +413,22 @@ class Renderer:
             cmd.extend(["-map", "0:v", "-map", "0:a?"])
 
         if self._input_has_audio(job.input_path):
-            cmd.extend([
-                "-af",
-                "highpass=f=80,"
-                "lowpass=f=9000,"
-                "afftdn=nf=-20,"
-                "equalizer=f=220:t=q:w=1.1:g=-2,"
-                "equalizer=f=2800:t=q:w=1.0:g=2,"
-                "acompressor=threshold=0.09:ratio=2.2:attack=15:release=220:makeup=3,"
-                "alimiter=limit=0.96",
-            ])
+            cmd.extend(["-af", SHORTS_AUDIO_FILTER])
 
-        # Encoding settings
-        cmd.extend([
+        # Encoding settings (shared with the tutorial render path)
+        cmd.extend(self._encode_args())
+
+        # Subtitle burning (if provided and not in filter)
+        if job.subtitle_path and job.subtitle_path.exists():
+            # Subtitles are handled in filter_complex
+            pass
+
+        cmd.append(str(job.output_path))
+        return cmd
+
+    def _encode_args(self) -> list[str]:
+        """Shared video/audio encode arguments for the shorts render paths."""
+        args = [
             "-c:v", self.encoder,
             "-preset", self.preset,
             "-c:a", "aac",
@@ -418,25 +437,144 @@ class Renderer:
             "-r", str(self.fps),
             "-pix_fmt", "yuv420p",
             "-movflags", "+faststart",
-        ])
-
+        ]
         if self.gpu_available:
-            # GPU (NVENC): high constant-quality with a generous bitrate ceiling
-            cmd.extend(["-b:v", self.video_bitrate])
+            # GPU (NVENC): high constant-quality with a generous bitrate ceiling.
+            args.extend(["-b:v", self.video_bitrate])
         else:
-            # CPU (libx264): pure CRF for maximum quality. A generous maxrate
-            # ceiling prevents runaway files without capping normal footage.
-            cmd.extend([
-                "-crf", str(self.crf),
-                "-maxrate", self.video_bitrate,
-                "-bufsize", "32M",
-            ])
+            # CPU (libx264): pure CRF with a generous maxrate ceiling.
+            args.extend(["-crf", str(self.crf), "-maxrate", self.video_bitrate, "-bufsize", "32M"])
+        return args
 
-        # Subtitle burning (if provided and not in filter)
-        if job.subtitle_path and job.subtitle_path.exists():
-            # Subtitles are handled in filter_complex
-            pass
+    def _build_tutorial_ffmpeg_command(self, job: RenderJob) -> list[str]:
+        """Build the FFmpeg command for a tutorial-style short.
 
+        The source is a 9:16 recording (slides on top, face-cam on bottom).
+        Overlay positions come from ``config.shorts_overlay`` so nothing is
+        hardcoded and nothing covers the speaker's face:
+          - Website banner centered on the slide/face boundary (a divider).
+          - Social icons + Topmate stacked in the upper-left of the face area.
+          - Subtitles burned on the content only.
+          - The outro clip is concatenated after the content segment.
+        """
+        cfg = get_config().shorts_overlay
+        W, H, fps = self.output_width, self.output_height, self.fps
+
+        # px values are authored for a 1080-wide frame; scale for other widths.
+        scale_px = W / 1080.0
+        safe = round(cfg.safe_margin * scale_px)
+        pad = round(cfg.overlay_padding * scale_px)
+        boundary_y = round(cfg.boundary_fraction * H)
+
+        cmd = ["ffmpeg", "-y", "-ss", str(job.start), "-to", str(job.end), "-i", str(job.input_path)]
+
+        def _existing(item) -> Path | None:
+            p = Path(item.image)
+            return p if item.image and p.exists() else None
+
+        social_p = _existing(cfg.social_icons)
+        topmate_p = _existing(cfg.topmate)
+        website_p = _existing(cfg.website)
+        outro_p = Path(cfg.outro_path) if cfg.outro_path and Path(cfg.outro_path).exists() else None
+
+        input_idx = 1
+        social_idx = topmate_idx = website_idx = outro_idx = None
+        if social_p is not None:
+            cmd += ["-i", str(social_p)]; social_idx = input_idx; input_idx += 1
+        if topmate_p is not None:
+            cmd += ["-i", str(topmate_p)]; topmate_idx = input_idx; input_idx += 1
+        if website_p is not None:
+            cmd += ["-i", str(website_p)]; website_idx = input_idx; input_idx += 1
+        if outro_p is not None:
+            cmd += ["-i", str(outro_p)]; outro_idx = input_idx; input_idx += 1
+
+        has_audio = self._input_has_audio(job.input_path)
+        silence_idx = None
+        if not has_audio:
+            seg_len = max(0.1, float(job.end) - float(job.start))
+            cmd += ["-f", "lavfi", "-t", f"{seg_len:.3f}", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"]
+            silence_idx = input_idx; input_idx += 1
+
+        fc: list[str] = []
+        # Fit the 9:16 source into the output frame (letterbox if not exactly 9:16).
+        fc.append(
+            f"[0:v]scale={W}:{H}:force_original_aspect_ratio=decrease,"
+            f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}[base]"
+        )
+        cur = "[base]"
+        step = 0
+
+        def _stack(img_idx: int, width_frac: float, x_expr: str, y: int) -> None:
+            """Scale an overlay image to a fraction of frame width and place it."""
+            nonlocal cur, step
+            w = max(2, round(width_frac * W))
+            fc.append(f"[{img_idx}:v]scale={w}:-1[ovin{step}]")
+            fc.append(f"{cur}[ovin{step}]overlay={x_expr}:{y}[ovl{step}]")
+            cur = f"[ovl{step}]"
+            step += 1
+
+        # Website banner: horizontally centered, straddling the boundary line so
+        # it reads as a divider between the slide area and the face-cam area.
+        web_bottom = boundary_y
+        if website_idx is not None:
+            web_w = max(2, round(cfg.website.width_frac * W))
+            web_h = round(web_w * (300 / 2400))  # tkk-website.png is 2400x300
+            web_y = boundary_y - web_h // 2
+            _stack(website_idx, cfg.website.width_frac, "(W-w)/2", web_y)
+            web_bottom = web_y + web_h
+
+        # Social icons: upper-left of the face-cam area, just under the divider.
+        social_y = max(boundary_y + safe, web_bottom + pad)
+        social_h = 0
+        if social_idx is not None:
+            social_w = max(2, round(cfg.social_icons.width_frac * W))
+            social_h = round(social_w * (200 / 1000))  # tkk_socials.png is 1000x200
+            _stack(social_idx, cfg.social_icons.width_frac, str(safe), social_y)
+
+        # Topmate banner: directly below the social icons, left-aligned.
+        if topmate_idx is not None:
+            topmate_y = social_y + social_h + round(cfg.topmate.margin_top * scale_px)
+            _stack(topmate_idx, cfg.topmate.width_frac, str(safe), topmate_y)
+
+        # Burn subtitles onto the content only (before the outro is appended).
+        if job.subtitle_path and job.subtitle_path.exists() and self._has_subtitle_filter:
+            tmp_dir = Path(tempfile.gettempdir()) / "shorts_render"
+            tmp_dir.mkdir(exist_ok=True)
+            tmp_sub = tmp_dir / f"sub{os.getpid()}_{step}{job.subtitle_path.suffix}"
+            tmp_sub.unlink(missing_ok=True)
+            tmp_sub.symlink_to(job.subtitle_path.resolve())
+            self._temp_links.append(tmp_sub)
+            sub = str(tmp_sub)
+            sub_filter = f"ass={sub}" if job.subtitle_path.suffix == ".ass" else f"subtitles={sub}"
+            fc.append(f"{cur}{sub_filter}[cv]")
+            cur = "[cv]"
+
+        # Content audio: voice cleanup (or generated silence), normalized for concat.
+        if has_audio:
+            fc.append(
+                f"[0:a]{SHORTS_AUDIO_FILTER},aresample=48000,"
+                f"aformat=sample_fmts=fltp:channel_layouts=stereo[ca]"
+            )
+        else:
+            fc.append(f"[{silence_idx}:a]aformat=sample_fmts=fltp:channel_layouts=stereo[ca]")
+
+        # Append the outro (scaled to match) via concat, else output content alone.
+        if outro_idx is not None:
+            fc.append(
+                f"[{outro_idx}:v]scale={W}:{H}:force_original_aspect_ratio=decrease,"
+                f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}[ov]"
+            )
+            fc.append(
+                f"[{outro_idx}:a]aresample=48000,"
+                f"aformat=sample_fmts=fltp:channel_layouts=stereo[oa]"
+            )
+            fc.append(f"{cur}[ca][ov][oa]concat=n=2:v=1:a=1[vout][aout]")
+        else:
+            fc.append(f"{cur}null[vout]")
+            fc.append("[ca]anull[aout]")
+
+        cmd += ["-filter_complex", ";".join(fc), "-map", "[vout]", "-map", "[aout]"]
+        cmd += self._encode_args()
         cmd.append(str(job.output_path))
         return cmd
 
