@@ -100,7 +100,15 @@ class ClipSelector:
             # (0-30, 30-60, ...). No motion/scene detection is performed.
             return self._select_fixed_segments(video_info, max_clips=max_clips)
         else:
-            return self._select_tutorial_clips(video_path, video_info, max_clips)
+            # Tutorial shorts are cut into fixed content segments (config-driven,
+            # e.g. 27s each); the outro is appended later during rendering.
+            overlay_cfg = get_config().shorts_overlay
+            return self._select_fixed_segments(
+                video_info,
+                segment_seconds=float(overlay_cfg.segment_seconds),
+                min_tail=float(overlay_cfg.min_tail_seconds),
+                max_clips=max_clips,
+            )
 
     def _select_fixed_segments(
         self,

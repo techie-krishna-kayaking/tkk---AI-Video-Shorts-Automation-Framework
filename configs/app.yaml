@@ -36,6 +36,28 @@ shorts:
   silence_min_duration: 2.0
   overlap_seconds: 0.5
 
+# Tutorial-style shorts (techie_krishna_kayaking, tkk_live_shorts):
+# 9:16 source (slides on top, face-cam on bottom). Overlays are placed
+# relative to the frame so nothing sits over the speaker's face.
+# All px values assume a 1080-wide frame and scale for other widths.
+shorts_overlay:
+  segment_seconds: 27.0        # each output = 27s of content + outro
+  min_tail_seconds: 2.0        # keep a final short only if it has >= this much content
+  outro_path: "assets/social/tkk-shorts-outro1.mp4"
+  safe_margin: 20              # left/top inset for the stacked overlays (px)
+  overlay_padding: 15          # vertical gap between stacked overlays (px)
+  boundary_fraction: 0.65      # slide/face divider position (fraction of height)
+  social_icons:
+    image: "assets/social/tkk_socials.png"
+    width_frac: 0.34
+  topmate:
+    image: "assets/social/tkk-topamte-color.png"
+    width_frac: 0.42
+    margin_top: 15
+  website:
+    image: "assets/social/tkk-website.png"
+    width_frac: 0.52
+
 transcription:
   model: "base"
   language: "en"
@@ -83,8 +105,8 @@ trip:
   instagram_music_volume: 0.2
   trending_audio_count: 100
   cleanup_after_upload: true
-  output_width: 3840
-  output_height: 2160
+  output_width: 2560
+  output_height: 1440
   instagram_trending_manifest: "configs/trending_audio_instagram.json"
   youtube_trending_manifest: "configs/trending_audio_youtube.json"
   trending_provider:
