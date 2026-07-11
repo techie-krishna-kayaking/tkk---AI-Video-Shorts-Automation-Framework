@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 import httplib2
+from google.auth.transport.requests import Request
+from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
@@ -93,8 +95,24 @@ class YouTubeUploader:
                         missing_scopes=sorted(set(SCOPES) - granted_scopes),
                     )
                     credentials = None
-                if credentials.valid:
+                if credentials and credentials.valid:
                     logger.info("credentials_loaded", path=str(credentials_path))
+                elif (
+                    credentials
+                    and credentials.expired
+                    and credentials.refresh_token
+                ):
+                    try:
+                        credentials.refresh(Request())
+                        logger.info(
+                            "credentials_refreshed", path=str(credentials_path)
+                        )
+                        credentials_path.write_text(credentials.to_json())
+                    except RefreshError:
+                        logger.info(
+                            "credentials_refresh_failed", path=str(credentials_path)
+                        )
+                        credentials = None
                 else:
                     credentials = None
             except Exception:
