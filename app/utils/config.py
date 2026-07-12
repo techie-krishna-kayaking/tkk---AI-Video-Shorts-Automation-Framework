@@ -144,6 +144,13 @@ class ChannelConfig(BaseModel):
     youtube: YouTubeChannelConfig = Field(default_factory=YouTubeChannelConfig)
 
 
+class NotificationsConfig(BaseModel):
+    """Telegram status-notification settings (hourly progress updates)."""
+    enabled: bool = True
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+
+
 class OverlayItemConfig(BaseModel):
     """A single stacked overlay image (position/size are frame-relative)."""
     image: str = ""
@@ -190,6 +197,7 @@ class AppConfig(BaseModel):
     assets: AssetsConfig = Field(default_factory=AssetsConfig)
     trip: TripConfig = Field(default_factory=TripConfig)
     shorts_overlay: ShortsOverlayConfig = Field(default_factory=ShortsOverlayConfig)
+    notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
     channels: dict[str, ChannelConfig] = Field(default_factory=dict)
 
 

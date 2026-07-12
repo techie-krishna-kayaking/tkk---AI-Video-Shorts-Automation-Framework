@@ -98,6 +98,22 @@ assets:
   fonts_dir: "assets/fonts"
   overlays_dir: "assets/overlays"
 
+# ====================================================
+# Telegram status notifications
+# ====================================================
+# The tool sends a concise hourly progress update (on the hour, e.g. 1:00,
+# 2:00 ...) via Telegram while a batch / batch-all run is in progress.
+#
+# >>> UPDATE YOUR TWO VALUES BELOW <<<
+#   telegram_bot_token : token from @BotFather
+#   telegram_chat_id   : your chat/user id (from @userinfobot)
+#
+# You may also set them as environment variables instead (these override the
+# values below): TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.
+notifications:
+  enabled: true
+  telegram_bot_token: "8798151262:AAFsRUn_tfaQZA1ONWQmBp9WdfKpExro1aU"   # <-- paste your bot token here
+  telegram_chat_id: "1160739943"     # <-- paste your chat id here
 trip:
   photo_duration: 4.0
   ken_burns_enabled: true

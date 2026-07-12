@@ -47,6 +47,11 @@ from app.utils.files import (
     sanitize_filename,
 )
 from app.utils.logging import console as rich_console, create_progress, get_logger, setup_logging
+from app.utils.status_reporter import (
+    get_tracker as _get_status_tracker,
+    start_status_reporter as _start_status_reporter,
+    stop_status_reporter as _stop_status_reporter,
+)
 from app.trending_audio_provider import TrendingAudioProvider
 from app.vlog_pipeline import apply_music_only_audio, create_platform_exports, create_vlog_longform, discover_vlog_media
 
@@ -868,6 +873,9 @@ def batch(
             rich_console.print(f"[bold cyan]Folders:[/bold cyan] {len(subfolders)} found")
             rich_console.print("=" * 60)
 
+            _get_status_tracker().begin_channel(ch_config.name, len(subfolders), unit_label="Folders")
+            _start_status_reporter()
+
             results: list[dict[str, str | int]] = []
             for idx, subfolder in enumerate(subfolders, 1):
                 rich_console.print(f"\n[bold]({idx}/{len(subfolders)})[/bold] {subfolder.name}")
@@ -891,6 +899,11 @@ def batch(
                     extensions=ext_list,
                 )
                 results.append(row)
+
+                _get_status_tracker().unit_done(
+                    long_added=1 if str(row["longform"]) == "ok" else 0,
+                    shorts_added=int(row["shorts"]) if str(row["shorts"]).isdigit() else 0,
+                )
 
                 rich_console.print(
                     "  [bold]Folder result:[/bold] "
@@ -933,6 +946,7 @@ def batch(
                 for row in rerun_rows:
                     cmd = str(row["rerun"]).replace("{channel}", channel)
                     rich_console.print(f"  {cmd}")
+            _stop_status_reporter()
             return
 
         videos = discover_channel_videos(ch_config.input_folder, ext_list)
@@ -969,6 +983,10 @@ def batch(
     success_count = 0
     fail_count = 0
 
+    _channel_display = ch_config.name if (channel and ch_config) else "Batch"
+    _get_status_tracker().begin_channel(_channel_display, len(videos), unit_label="Videos")
+    _start_status_reporter()
+
     for idx, video in enumerate(videos, 1):
         rich_console.print(f"\n[bold]({idx}/{len(videos)})[/bold] {video.name}")
         try:
@@ -988,7 +1006,12 @@ def batch(
             rich_console.print(f"  [red]Error: {e}[/red]")
             logger.error("batch_video_failed", video=str(video), error=str(e))
             fail_count += 1
+            _get_status_tracker().unit_done()
             continue
+
+        _get_status_tracker().unit_done(
+            shorts_added=len(rendered) if isinstance(rendered, (list, tuple)) else (1 if rendered else 0)
+        )
 
     rich_console.print(f"\n[bold green]Batch complete![/bold green]")
     rich_console.print(f"  Shorts — Processed: {success_count} | Failed: {fail_count}")
@@ -1002,6 +1025,8 @@ def batch(
             pass
         except Exception as e:
             rich_console.print(f"  [red]Long-form error: {e}[/red]")
+
+    _stop_status_reporter()
 
 
 @app.command(name="audit-vlog")
@@ -1096,6 +1121,8 @@ def batch_all(
     rich_console.print(f"\n[bold cyan]Batch All — Smart processing {len(config.channels)} channels[/bold cyan]")
     rich_console.print("=" * 60)
 
+    _start_status_reporter()
+
     vlog_success = 0
     vlog_fail = 0
     shorts_success = 0
@@ -1125,6 +1152,8 @@ def batch_all(
             rich_console.print(f"  Subfolders: {len(subfolders)}")
             rich_console.print(f"[bold magenta]{'─' * 60}[/bold magenta]")
 
+            _get_status_tracker().begin_channel(ch_config.name, len(subfolders), unit_label="Folders")
+
             for idx, subfolder in enumerate(subfolders, 1):
                 rich_console.print(f"\n  [bold]({idx}/{len(subfolders)})[/bold] {subfolder.name}")
                 try:
@@ -1142,7 +1171,18 @@ def batch_all(
                     rich_console.print(f"    [red]Error: {e}[/red]")
                     logger.error("batch_all_vlog_failed", channel=ch_id, folder=str(subfolder), error=str(e))
                     vlog_fail += 1
+                    _get_status_tracker().unit_done()
                     continue
+
+                _row = _classify_vlog_outcome(
+                    folder=subfolder,
+                    output_folder=ch_config.output_folder,
+                    extensions=[f".{e.strip()}" for e in extensions.split(",")],
+                )
+                _get_status_tracker().unit_done(
+                    long_added=1 if str(_row["longform"]) == "ok" else 0,
+                    shorts_added=int(_row["shorts"]) if str(_row["shorts"]).isdigit() else 0,
+                )
 
         # ==================== REGULAR WORKFLOW (gopro | tutorial | other) ====================
         else:
@@ -1158,6 +1198,8 @@ def batch_all(
             rich_console.print(f"  Input:  {ch_config.input_folder}/")
             rich_console.print(f"  Videos: {len(videos)}")
             rich_console.print(f"[bold magenta]{'─' * 60}[/bold magenta]")
+
+            _get_status_tracker().begin_channel(ch_config.name, len(videos), unit_label="Videos")
 
             for idx, video in enumerate(videos, 1):
                 rich_console.print(f"\n  [bold]({idx}/{len(videos)})[/bold] {video.name}")
@@ -1178,7 +1220,12 @@ def batch_all(
                     rich_console.print(f"    [red]Error: {e}[/red]")
                     logger.error("batch_all_shorts_failed", channel=ch_id, video=str(video), error=str(e))
                     shorts_fail += 1
+                    _get_status_tracker().unit_done()
                     continue
+
+                _get_status_tracker().unit_done(
+                    shorts_added=len(rendered) if isinstance(rendered, (list, tuple)) else (1 if rendered else 0)
+                )
 
     # ==================== SUMMARY ====================
     rich_console.print(f"\n[bold green]{'=' * 60}[/bold green]")
@@ -1203,6 +1250,8 @@ def batch_all(
                 pass
             except Exception as e:
                 rich_console.print(f"  [red]Long-form error ({ch_id}): {e}[/red]")
+
+    _stop_status_reporter()
 
 
 @app.command()
