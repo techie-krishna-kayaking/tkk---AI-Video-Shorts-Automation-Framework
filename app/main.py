@@ -634,7 +634,6 @@ def _run_vlog_workflow(
 
     short_clips: list[Path] = []
     short_errors = 0
-    max_workers = max(1, int(getattr(config.processing, "max_workers", 4)))
     # Keep short renders serialized to preserve part ordering for shared vlog clip names.
     short_workers = 1
 
