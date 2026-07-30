@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
@@ -154,6 +153,20 @@ class ChannelConfig(BaseModel):
     youtube: YouTubeChannelConfig = Field(default_factory=YouTubeChannelConfig)
 
 
+class EditingFlowConfig(BaseModel):
+    """Type-based editing flow configuration."""
+
+    name: str = ""
+    flow_type: str = ""
+    input_folder: str = ""
+    output_folder: str = ""
+    socials_file: str = ""
+    intro_text: str = ""
+    hook_keywords: list[str] = Field(default_factory=list)
+    vlog_shorts_editing: str = "editing1"
+    enabled: bool = True
+
+
 class NotificationsConfig(BaseModel):
     """Telegram status-notification settings (hourly progress updates)."""
     enabled: bool = True
@@ -210,6 +223,7 @@ class AppConfig(BaseModel):
     shorts_overlay: ShortsOverlayConfig = Field(default_factory=ShortsOverlayConfig)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
     channels: dict[str, ChannelConfig] = Field(default_factory=dict)
+    editing_flows: dict[str, EditingFlowConfig] = Field(default_factory=dict)
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
@@ -221,6 +235,7 @@ def load_yaml(path: Path) -> dict[str, Any]:
 def load_config(
     app_config_path: Path | None = None,
     channels_config_path: Path | None = None,
+    editing_flows_path: Path | None = None,
 ) -> AppConfig:
     """Load and merge application and channel configs."""
     project_root = Path(__file__).parent.parent.parent
@@ -229,6 +244,8 @@ def load_config(
         app_config_path = project_root / "configs" / "app.yaml"
     if channels_config_path is None:
         channels_config_path = project_root / "configs" / "channels.yaml"
+    if editing_flows_path is None:
+        editing_flows_path = project_root / "configs" / "editing_flows.yaml"
 
     app_data: dict[str, Any] = {}
     if app_config_path.exists():
@@ -245,7 +262,17 @@ def load_config(
             for name, channel_dict in raw_channels["channels"].items():
                 channels_data[name] = ChannelConfig(**channel_dict)
 
-    config = AppConfig(**app_data, channels=channels_data)
+    flows_data: dict[str, EditingFlowConfig] = {}
+    if editing_flows_path.exists():
+        raw_flows = load_yaml(editing_flows_path)
+        if "editing_flows" in raw_flows:
+            for name, flow_dict in raw_flows["editing_flows"].items():
+                flow_payload = dict(flow_dict or {})
+                flow_payload.setdefault("name", name)
+                flow_payload.setdefault("flow_type", name)
+                flows_data[name] = EditingFlowConfig(**flow_payload)
+
+    config = AppConfig(**app_data, channels=channels_data, editing_flows=flows_data)
     return config
 
 

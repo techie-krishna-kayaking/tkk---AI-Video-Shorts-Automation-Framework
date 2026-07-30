@@ -15,8 +15,8 @@ Usage:
 
 from __future__ import annotations
 
-import sys
 import re
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from datetime import datetime
@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import Optional
 
 import typer
-from rich.console import Console
 from rich.table import Table
 
 from app.caption_generator import CaptionGenerator
@@ -44,7 +43,7 @@ from app.renderer import Renderer
 from app.scheduler import Scheduler
 from app.transcriber import Transcriber
 from app.uploader import YouTubeUploader
-from app.utils.config import get_config, load_config
+from app.utils.config import ChannelConfig, EditingFlowConfig, get_config
 from app.utils.files import (
     discover_channel_videos,
     ensure_ffmpeg,
@@ -247,6 +246,263 @@ def _init() -> None:
     if not ensure_ffmpeg():
         rich_console.print("[bold red]FFmpeg not found! Please install FFmpeg.[/bold red]")
         raise typer.Exit(1)
+
+
+def _resolve_flow_or_exit(flow_id: str) -> EditingFlowConfig:
+    config = get_config()
+    flow_cfg = config.editing_flows.get(flow_id)
+    if not flow_cfg:
+        rich_console.print(f"[bold red]Editing flow not found: {flow_id}[/bold red]")
+        if config.editing_flows:
+            rich_console.print(f"  Available: {', '.join(sorted(config.editing_flows.keys()))}")
+        raise typer.Exit(1)
+    if not flow_cfg.enabled:
+        rich_console.print(f"[yellow]Editing flow is disabled: {flow_id}[/yellow]")
+        raise typer.Exit(0)
+    return flow_cfg
+
+
+def _resolve_overlay_path(socials_file: str) -> Path | None:
+    if not socials_file:
+        return None
+    candidate = Path(socials_file)
+    return candidate if candidate.exists() else None
+
+
+def _discover_flow_videos(input_folder: str, extensions: list[str] | None = None) -> list[Path]:
+    return discover_channel_videos(input_folder, extensions=extensions)
+
+
+@contextmanager
+def _temporary_flow_channel(
+    flow_key: str,
+    flow_cfg: EditingFlowConfig,
+    *,
+    channel_type: str,
+    vlog_shorts_editing: str = "editing1",
+):
+    """Attach a temporary in-memory channel for reusing stable render paths."""
+    config = get_config()
+    temp_id = f"__flow__{flow_key}"
+    prev = config.channels.get(temp_id)
+
+    temp_channel = ChannelConfig(
+        type=channel_type,
+        name=flow_cfg.name or flow_key,
+        youtube_url="",
+        input_folder=flow_cfg.input_folder,
+        output_folder=flow_cfg.output_folder,
+        socials_file=flow_cfg.socials_file,
+        social_footer="",
+        intro_text=flow_cfg.intro_text,
+        vlog_shorts_editing=vlog_shorts_editing,
+        hook_keywords=flow_cfg.hook_keywords,
+        upload_enabled=False,
+    )
+
+    config.channels[temp_id] = temp_channel
+    try:
+        yield temp_id, temp_channel
+    finally:
+        if prev is None:
+            config.channels.pop(temp_id, None)
+        else:
+            config.channels[temp_id] = prev
+
+
+@app.command(name="flows")
+def list_editing_flows() -> None:
+    """List all YAML-defined type-based editing flows."""
+    _init()
+    config = get_config()
+
+    if not config.editing_flows:
+        rich_console.print("[yellow]No editing flows configured in configs/editing_flows.yaml[/yellow]")
+        raise typer.Exit(0)
+
+    table = Table(title="Configured Editing Flows")
+    table.add_column("Flow ID", style="cyan")
+    table.add_column("Type", style="yellow")
+    table.add_column("Input", style="green")
+    table.add_column("Output", style="magenta")
+    table.add_column("Enabled", style="bold")
+
+    for flow_id, flow in sorted(config.editing_flows.items()):
+        table.add_row(
+            flow_id,
+            flow.flow_type or flow_id,
+            flow.input_folder,
+            flow.output_folder,
+            "yes" if flow.enabled else "no",
+        )
+
+    rich_console.print(table)
+
+
+@app.command(name="run-flow")
+def run_flow(
+    flow: str = typer.Option(..., "--flow", "-f", help="Flow ID from configs/editing_flows.yaml"),
+    max_clips: Optional[int] = typer.Option(None, "--max-clips", "-n", help="Max clips per video for short-form flows."),
+    fast: bool = typer.Option(False, "--fast", help="Fast mode for transcription-based steps."),
+    words_per_line: int = typer.Option(4, "--words-per-line", help="Subtitle words shown together for camera/tutorial long-form."),
+) -> None:
+    """Run one type-based editing flow from YAML-defined input/output/socials paths."""
+    _init()
+    flow_cfg = _resolve_flow_or_exit(flow)
+
+    input_path = Path(flow_cfg.input_folder)
+    output_path = Path(flow_cfg.output_folder)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    if not input_path.exists():
+        rich_console.print(f"[bold red]Input folder not found: {input_path}[/bold red]")
+        raise typer.Exit(1)
+
+    overlay_path = _resolve_overlay_path(flow_cfg.socials_file)
+    if flow_cfg.socials_file and overlay_path is None:
+        rich_console.print(f"[yellow]Warning: socials file not found: {flow_cfg.socials_file}[/yellow]")
+
+    flow_type = (flow_cfg.flow_type or flow).strip().lower()
+    short_extensions = [".mp4", ".mov", ".avi", ".mkv", ".m4v"]
+
+    rich_console.print("\n[bold cyan]Type-Based Flow Run[/bold cyan]")
+    rich_console.print(f"  Flow:   {flow}")
+    rich_console.print(f"  Type:   {flow_type}")
+    rich_console.print(f"  Input:  {input_path}")
+    rich_console.print(f"  Output: {output_path}")
+    rich_console.print(f"  Social: {flow_cfg.socials_file or 'none'}")
+    rich_console.print("=" * 60)
+
+    shortform_types = {
+        "camera_facing_short_form",
+        "tutorial_short_form",
+        "vlog_gopro_short_form_editing_style_1",
+        "vlog_gopro_short_form_editing_style_2",
+    }
+
+    if flow_type in shortform_types:
+        videos = _discover_flow_videos(flow_cfg.input_folder, extensions=short_extensions)
+        if not videos:
+            rich_console.print(f"[yellow]No videos found in {input_path}[/yellow]")
+            raise typer.Exit(0)
+
+        channel_type = "gopro" if "vlog_gopro" in flow_type else "tutorial"
+        gopro_mode = "editing2" if flow_type.endswith("style_2") else "editing1"
+
+        with _temporary_flow_channel(
+            flow_key=flow,
+            flow_cfg=flow_cfg,
+            channel_type=channel_type,
+            vlog_shorts_editing=gopro_mode,
+        ) as (temp_channel_id, _):
+            rendered_count = 0
+            for idx, video in enumerate(videos, 1):
+                rich_console.print(f"\n[bold]({idx}/{len(videos)})[/bold] {video.name}")
+                out_files = process(
+                    video_path=video,
+                    channel=temp_channel_id,
+                    max_clips=max_clips,
+                    fast=fast,
+                    no_captions=False,
+                    no_upload=True,
+                )
+                rendered_count += len(out_files)
+
+        rich_console.print(f"\n[bold green]Done.[/bold green] Generated {rendered_count} short clips.")
+        return
+
+    if flow_type == "vlog_gopro_long_form":
+        subfolders = discover_subfolders(flow_cfg.input_folder)
+        root_videos = _discover_flow_videos(flow_cfg.input_folder, extensions=short_extensions)
+        if root_videos:
+            subfolders.setdefault(sanitize_filename(input_path.name), root_videos)
+        if not subfolders:
+            rich_console.print(f"[yellow]No subfolders with videos found in {input_path}[/yellow]")
+            raise typer.Exit(0)
+
+        success = 0
+        for folder_name, videos in subfolders.items():
+            out_file = output_path / f"{folder_name}_full.mp4"
+            result = generate_longform(videos=videos, output_path=out_file, overlay_path=overlay_path)
+            if result.success:
+                success += 1
+                rich_console.print(f"  [green]✓[/green] {out_file.name}")
+            else:
+                rich_console.print(f"  [red]✗[/red] {out_file.name}")
+                for err in result.errors:
+                    rich_console.print(f"    - {err}")
+
+        rich_console.print(f"\n[bold green]Done.[/bold green] Long-form outputs created: {success}/{len(subfolders)}")
+        return
+
+    if flow_type in {"camera_facing_long_form", "tutorial_long_form"}:
+        videos = _discover_flow_videos(flow_cfg.input_folder, extensions=short_extensions)
+        if not videos:
+            rich_console.print(f"[yellow]No videos found in {input_path}[/yellow]")
+            raise typer.Exit(0)
+
+        success = 0
+        suffix = "camera_longform" if flow_type == "camera_facing_long_form" else "tutorial_longform"
+        for video in videos:
+            out_name = f"{sanitize_filename(get_channel_video_name(video, flow_cfg.input_folder))}_{suffix}.mp4"
+            out_file = output_path / out_name
+            result = generate_camera_recording_longform(
+                input_video=video,
+                output_path=out_file,
+                words_per_line=words_per_line,
+                overlay_path=overlay_path,
+            )
+            if result.success:
+                success += 1
+                rich_console.print(f"  [green]✓[/green] {out_file.name}")
+            else:
+                rich_console.print(f"  [red]✗[/red] {out_file.name}")
+                for err in result.errors:
+                    rich_console.print(f"    - {err}")
+
+        rich_console.print(f"\n[bold green]Done.[/bold green] Long-form outputs created: {success}/{len(videos)}")
+        return
+
+    if flow_type == "cooking_long_form":
+        videos = _discover_flow_videos(flow_cfg.input_folder, extensions=short_extensions)
+        if not videos:
+            rich_console.print(f"[yellow]No videos found in {input_path}[/yellow]")
+            raise typer.Exit(0)
+        out_file = output_path / f"{sanitize_filename(input_path.name)}_cooking_longform.mp4"
+        result = generate_cooking_recording_longform(
+            input_videos=videos,
+            output_path=out_file,
+            overlay_path=overlay_path,
+        )
+        if not result.success:
+            rich_console.print("[bold red]Cooking long-form render failed.[/bold red]")
+            for err in result.errors:
+                rich_console.print(f"  - {err}")
+            raise typer.Exit(1)
+        rich_console.print(f"\n[bold green]Done.[/bold green] {out_file}")
+        return
+
+    if flow_type == "cooking_short_form":
+        videos = _discover_flow_videos(flow_cfg.input_folder, extensions=short_extensions)
+        if not videos:
+            rich_console.print(f"[yellow]No videos found in {input_path}[/yellow]")
+            raise typer.Exit(0)
+        out_file = output_path / f"{sanitize_filename(input_path.name)}_cooking_shortform.mp4"
+        result = generate_cooking_shortform(
+            input_videos=videos,
+            output_path=out_file,
+            overlay_path=overlay_path,
+        )
+        if not result.success:
+            rich_console.print("[bold red]Cooking short-form render failed.[/bold red]")
+            for err in result.errors:
+                rich_console.print(f"  - {err}")
+            raise typer.Exit(1)
+        rich_console.print(f"\n[bold green]Done.[/bold green] {out_file}")
+        return
+
+    rich_console.print(f"[bold red]Unsupported flow type: {flow_type}[/bold red]")
+    raise typer.Exit(1)
 
 
 @app.command()

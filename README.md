@@ -130,72 +130,66 @@
 > Activate the virtualenv first in every new terminal: `source .venv/bin/activate`
 
 ```bash
-# ── Discover ───────────────────────────────────────────────
-python3 -m app.main channels                      # list all configured channels
+# ── Type-based flow discovery ───────────────────────────────
+python3 -m app.main flows
 
-# ── Render ALL channels (smart-routes vlog/gopro/tutorial, no upload) ──
-caffeinate -dimsu python3 -m app.main batch-all                  # quality pass (final)
-caffeinate -dimsu python3 -m app.main batch-all --fast           # quick test pass
+# ── Run one YAML-defined flow ───────────────────────────────
+python3 -m app.main run-flow --flow camera_facing_long_form
+python3 -m app.main run-flow --flow camera_facing_short_form --max-clips 5 --fast
+python3 -m app.main run-flow --flow vlog_gopro_long_form
+python3 -m app.main run-flow --flow vlog_gopro_short_form_editing_style_1 --max-clips 8
+python3 -m app.main run-flow --flow vlog_gopro_short_form_editing_style_2 --max-clips 8
+python3 -m app.main run-flow --flow cooking_long_form
+python3 -m app.main run-flow --flow cooking_short_form
+python3 -m app.main run-flow --flow tutorial_long_form
+python3 -m app.main run-flow --flow tutorial_short_form --max-clips 6
 
-# ── Render a SINGLE channel ────────────────────────────────
-caffeinate -dimsu python3 -m app.main batch --channel krgd_vlogs               # vlog: longform + shorts (parallel)
-caffeinate -dimsu python3 -m app.main batch --channel techie_krishna_kayaking  --fast
-caffeinate -dimsu python3 -m app.main batch --channel krishna_kayaking --max-clips 108
-caffeinate -dimsu python3 -m app.main batch --channel tkk_live_shorts --fast
-
-# ── Render a SINGLE folder / quick test ────────────────────
-caffeinate -dimsu python3 -m app.main vlog "input/krgd_vlogs/<FOLDER_NAME>" --channel krgd_vlogs --no-upload
-caffeinate -dimsu python3 -m app.main vlog "input/krgd_vlogs/test_short" --channel krgd_vlogs --max-clips 1 --no-upload --fast
-
-# ── Music-only folder (drop raw audio; YT→assets/bgmusic/yt, Insta→assets/bgmusic/insta) ──
-caffeinate -dimsu python3 -m app.main vlog-music "input/krgd_vlogs/<FOLDER_NAME>" --channel krgd_vlogs --no-upload
-
-# ── Schedule + upload (7-day spread) ───────────────────────
+# ── Schedule + upload (unchanged, channel-based uploader pipeline) ──────
+# If you use scheduling/upload commands, keep channels.yaml configured.
 python3 -m app.main schedule output/krgd_vlogs/yt --channel krgd_vlogs
-python3 -m app.main schedule output/krishna_kayaking/ --channel krishna_kayaking
-python3 -m app.main schedule output/techie_krishna_kayaking/ --channel techie_krishna_kayaking
-python3 -m app.main schedule output/tkk_live_shorts/ --channel tkk_live_shorts
 
 caffeinate -dimsu python3 -m app.main execute-schedule          # run all pending uploads
 python3 -m app.main reset-schedule                # clear pending (keep history)
 python3 -m app.main reset-schedule --all          # full reset (schedule + history)
 ```
 
-**`--fast`** uses the tiny Whisper model (~2× faster); omit it for best transcription/caption quality. **`caffeinate -dimsu`** keeps macOS awake during long runs. See [Other CLI Commands](#other-cli-commands) for long-form, watch, and single-video commands.
+**`--fast`** uses the tiny Whisper model (~2× faster); omit it for best transcription/caption quality. **`caffeinate -dimsu`** keeps macOS awake during long runs.
 
 ---
 ## 📁 Video Editing Flows (Current Source of Truth)
 
-This section documents the current behavior implemented in the codebase.
+This section documents the current type-based behavior implemented in the codebase.
 
 ### 1) Where to place inputs
 
-- Channel inputs must be placed under `input/<channel_id>/`.
-- Channel IDs and their folders are configured in `configs/channels.yaml`.
-- Nested folders are supported for vlog/gopro flows (example: `input/krgd_vlogs/2026-07-20/clip01.mp4`).
+- Inputs are configured per flow in `configs/editing_flows.yaml`.
+- Each flow has one explicit `input_folder` (relative path).
+- Nested folders under that folder are supported.
+- Only the configured flow folder is processed; unrelated folders are ignored.
 - Supported video extensions include `.mp4`, `.mov`, `.avi`, `.mkv`, `.m4v`.
 
 ### 2) Where outputs are generated
 
-- All outputs are written to each channel's `output_folder` from `configs/channels.yaml`.
+- Outputs are configured per flow in `configs/editing_flows.yaml`.
+- Each flow writes only to its own `output_folder`.
 - Typical structure:
-  - Shorts/raw clips: `output/<channel_id>/..._partNNN.mp4`
-  - Platform variants: `output/<channel_id>/..._yt.mp4` and `output/<channel_id>/..._insta.mp4`
-  - Long-form (vlog command): `output/<channel_id>/longform/<folder>_vlog_longform.mp4`
-  - GoPro longform command: `output/<channel_id>/longform/<subfolder>_full.mp4`
-  - Camera flow: `output/<channel_id>/longform_camera/<name>_camera_longform.mp4`
-  - Cooking longform: `output/<channel_id>/longform_cooking/<name>_cooking_longform.mp4`
-  - Cooking shortform: `output/<channel_id>/shortform_cooking/<name>_cooking_shortform.mp4`
+  - Camera/Tutorial short-form: `<flow_output>/..._partNNN.mp4`
+  - Vlog GoPro short-form style1/style2: `<flow_output>/..._partNNN.mp4`
+  - Vlog GoPro long-form: `<flow_output>/<subfolder>_full.mp4`
+  - Camera long-form: `<flow_output>/..._camera_longform.mp4`
+  - Tutorial long-form: `<flow_output>/..._tutorial_longform.mp4`
+  - Cooking long-form: `<flow_output>/*_cooking_longform.mp4`
+  - Cooking short-form: `<flow_output>/*_cooking_shortform.mp4`
 
 ### 3) Where to place socials branding images
 
 - Place PNG overlay images in `assets/social/`.
-- Wire each channel to its socials image using `socials_file` in `configs/channels.yaml`.
+- Wire each flow to its socials image using `socials_file` in `configs/editing_flows.yaml`.
 - Example:
 
 ```yaml
-channels:
-  krgd_vlogs:
+editing_flows:
+  vlog_gopro_short_form_editing_style_1:
     socials_file: "assets/social/krgd_vlogs.png"
 ```
 
@@ -211,41 +205,45 @@ channels:
 
 | Flow | Command | Input path | Output path | Output video profile | Key editing features |
 |---|---|---|---|---|---|
-| Single-video shorts | `process` | any single file (usually under `input/<channel_id>/...`) | `output/<channel_id>/..._partNNN.mp4` | 9:16 shorts | Clip selection + render; channel-type aware layout; optional captions/subtitles |
-| Channel batch | `batch --channel <id>` | `input/<channel_id>/` (recursive) | `output/<channel_id>/` | Shorts | Processes all discovered videos; for vlog channels, routes to vlog workflow per subfolder |
-| All channels batch | `batch-all` | all configured channel input folders | each channel output folder | Mixed | Smart routing by type (`vlog`, `gopro`, `tutorial`), includes gopro longform pass |
-| Mixed-media vlog | `vlog` | `input/<channel_id>/<trip_or_date_folder>/` | `output/<channel_id>/` + `output/<channel_id>/longform/` | Shorts + longform | Parallel execution: longform generation + shorts generation; then platform exports |
-| Mixed-media vlog (music-only) | `vlog-music` | same as `vlog` | same as `vlog` | Shorts + longform | Drops raw audio; uses `assets/bgmusic/yt` for YouTube outputs and `assets/bgmusic/insta` for Instagram outputs |
-| GoPro longform only | `longform --channel <gopro_channel>` | subfolders under channel input folder | `output/<channel_id>/longform/` | 1080x1920 @ 30fps | Chronological merge + smooth zoom + tuned audio + standardized top-left socials |
-| Camera recording longform | `camera-longform` | single video file | `output/<channel_id>/longform_camera/` (or `output/camera_longform/`) | 1080x1920 @ 30fps | Silence trimming, EN subtitle burn-in, smooth zoom loop, tuned voice audio |
-| Cooking recording longform | `cooking-longform` | single file or folder of clips | `output/<channel_id>/longform_cooking/` (or `output/cooking_longform/`) | 1080x1920 @ 30fps | Chronological merge, silence + no-speech trimming, smooth zoom, tuned cooking audio |
-| Cooking recording shortform | `cooking-shortform` | single file or folder of clips | `output/<channel_id>/shortform_cooking/` (or `output/cooking_shortform/`) | 1920x1080 @ 30fps | Aggressive trimming to target 90-120s, smooth zoom, tuned cooking audio, bottom-center socials |
+| Camera Facing - Long Form | `run-flow --flow camera_facing_long_form` | from flow `input_folder` | flow `output_folder` | 1080x1920 @ 30fps | Silence trimming, EN subtitle burn-in, smooth zoom, top-left socials |
+| Camera Facing - Short Form | `run-flow --flow camera_facing_short_form` | from flow `input_folder` | flow `output_folder` | 9:16 shorts | Clip selection + tutorial-style short rendering + bottom-center socials |
+| Vlog GoPro - Long Form | `run-flow --flow vlog_gopro_long_form` | from flow `input_folder` | flow `output_folder` | 1080x1920 @ 30fps | Chronological merge, smooth zoom, tuned audio, top-left socials |
+| Vlog GoPro - Short Form Editing Style 1 | `run-flow --flow vlog_gopro_short_form_editing_style_1` | from flow `input_folder` | flow `output_folder` | 9:16 shorts | GoPro white letterbox style + bottom-center socials |
+| Vlog GoPro - Short Form Editing Style 2 | `run-flow --flow vlog_gopro_short_form_editing_style_2` | from flow `input_folder` | flow `output_folder` | 9:16 shorts | Orange 15/70/15 layout + bottom-center socials |
+| Cooking - Long Form | `run-flow --flow cooking_long_form` | from flow `input_folder` | flow `output_folder` | 1080x1920 @ 30fps | Chronological merge, silence + no-speech trimming, smooth zoom, tuned cooking audio |
+| Cooking - Short Form | `run-flow --flow cooking_short_form` | from flow `input_folder` | flow `output_folder` | 1920x1080 @ 30fps | Aggressive trimming (90-120s target), smooth zoom, tuned cooking audio, bottom-center socials |
+| Tutorial - Long Form | `run-flow --flow tutorial_long_form` | from flow `input_folder` | flow `output_folder` | 1080x1920 @ 30fps | Camera-style longform flow with subtitles and top-left socials |
+| Tutorial - Short Form | `run-flow --flow tutorial_short_form` | from flow `input_folder` | flow `output_folder` | 9:16 shorts | Tutorial short rendering with captions/subtitles and bottom-center socials |
 
 ### 6) Shorts layout types (vlog/gopro)
 
-Set `vlog_shorts_editing` in `configs/channels.yaml`:
+Set `vlog_shorts_editing` in `configs/editing_flows.yaml` for GoPro short flows:
 
 - `editing1`: classic white letterbox style (existing behavior preserved).
 - `editing2`: orange style with `15%` top area + `70%` center video + `15%` bottom CTA/socials.
-- `both`: renders both variants in one run.
 
-When `both` is enabled, one source produces two sets:
-
-- `..._editing1_partNNN.mp4`
-- `..._editing2_partNNN.mp4`
-
-If 10 source shorts are selected, 20 output shorts are generated.
+Use two different flow entries if you want both styles generated.
 
 ### 7) Example input/output mapping
 
 | Input | Command | Output |
 |---|---|---|
-| `input/krgd_vlogs/2026-07-20/GH011251.MP4` | `process --channel krgd_vlogs` | `output/krgd_vlogs/2026-07-20_gh011251_part001.mp4` (+ variant files) |
-| `input/krgd_vlogs/2026-07-20/` | `vlog --channel krgd_vlogs` | Longform in `output/krgd_vlogs/longform/` + shorts/platform files in `output/krgd_vlogs/` |
-| `input/krishna_kayaking/2026-07-20/` | `longform --channel krishna_kayaking` | `output/krishna_kayaking/longform/2026-07-20_full.mp4` |
+| `input/flows/vlog_gopro/shorts_style2/2026-07-20/GH011251.MP4` | `run-flow --flow vlog_gopro_short_form_editing_style_2` | `output/flows/vlog_gopro/shorts_style2/..._partNNN.mp4` |
+| `input/flows/vlog_gopro/longform/2026-07-20/` | `run-flow --flow vlog_gopro_long_form` | `output/flows/vlog_gopro/longform/2026-07-20_full.mp4` |
+| `input/flows/cooking/shortform/` | `run-flow --flow cooking_short_form` | `output/flows/cooking/shortform/*_cooking_shortform.mp4` |
+
+### 8) Config file used now
+
+- Primary editing config: `configs/editing_flows.yaml`
+- Primary branding config: `configs/app.yaml` under `branding`
+
+### 9) Legacy compatibility note
+
+- Channel-based commands and `configs/channels.yaml` are still available for backward compatibility.
+- For all new editing work, use `flows` + `run-flow` with `configs/editing_flows.yaml`.
 
 ---
-## 🎛️ Multi-Channel Architecture
+## 🎛️ Multi-Channel Architecture (Legacy Compatibility)
 
 The framework supports **multiple YouTube channels**, each with its own input folder, output folder, socials overlay, and YouTube credentials.
 

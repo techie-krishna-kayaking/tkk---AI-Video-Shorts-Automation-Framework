@@ -1,0 +1,81 @@
+# ====================================================
+# Type-based Editing Flows (no channel-based input/output folders)
+# ====================================================
+# Each flow is explicit: input_folder, output_folder, socials_file.
+# Point input_folder to the exact folder you want processed.
+# If your broader input tree has many subfolders, only this configured path is used.
+
+editing_flows:
+  camera_facing_long_form:
+    name: "Camera Facing - Long Form"
+    flow_type: "camera_facing_long_form"
+    input_folder: "input/flows/camera_facing/longform"
+    output_folder: "output/flows/camera_facing/longform"
+    socials_file: "assets/social/tkk_socials.png"
+    enabled: true
+
+  camera_facing_short_form:
+    name: "Camera Facing - Short Form"
+    flow_type: "camera_facing_short_form"
+    input_folder: "input/flows/camera_facing/shortform"
+    output_folder: "output/flows/camera_facing/shortform"
+    socials_file: "assets/social/tkk_socials.png"
+    enabled: true
+
+  vlog_gopro_long_form:
+    name: "Vlog GoPro - Long Form"
+    flow_type: "vlog_gopro_long_form"
+    input_folder: "input/flows/vlog_gopro/longform"
+    output_folder: "output/flows/vlog_gopro/longform"
+    socials_file: "assets/social/krgd_vlogs.png"
+    enabled: true
+
+  vlog_gopro_short_form_editing_style_1:
+    name: "Vlog GoPro - Short Form Editing Style 1"
+    flow_type: "vlog_gopro_short_form_editing_style_1"
+    input_folder: "input/flows/vlog_gopro/shorts_style1"
+    output_folder: "output/flows/vlog_gopro/shorts_style1"
+    socials_file: "assets/social/krgd_vlogs.png"
+    vlog_shorts_editing: "editing1"
+    enabled: true
+
+  vlog_gopro_short_form_editing_style_2:
+    name: "Vlog GoPro - Short Form Editing Style 2"
+    flow_type: "vlog_gopro_short_form_editing_style_2"
+    input_folder: "input/flows/vlog_gopro/shorts_style2"
+    output_folder: "output/flows/vlog_gopro/shorts_style2"
+    socials_file: "assets/social/krgd_vlogs.png"
+    vlog_shorts_editing: "editing2"
+    enabled: true
+
+  cooking_long_form:
+    name: "Cooking - Long Form"
+    flow_type: "cooking_long_form"
+    input_folder: "input/flows/cooking/longform"
+    output_folder: "output/flows/cooking/longform"
+    socials_file: "assets/social/tkk_socials.png"
+    enabled: true
+
+  cooking_short_form:
+    name: "Cooking - Short Form"
+    flow_type: "cooking_short_form"
+    input_folder: "input/flows/cooking/shortform"
+    output_folder: "output/flows/cooking/shortform"
+    socials_file: "assets/social/tkk_socials.png"
+    enabled: true
+
+  tutorial_long_form:
+    name: "Tutorial - Long Form"
+    flow_type: "tutorial_long_form"
+    input_folder: "input/flows/tutorial/longform"
+    output_folder: "output/flows/tutorial/longform"
+    socials_file: "assets/social/tkk_socials.png"
+    enabled: true
+
+  tutorial_short_form:
+    name: "Tutorial - Short Form"
+    flow_type: "tutorial_short_form"
+    input_folder: "input/flows/tutorial/shortform"
+    output_folder: "output/flows/tutorial/shortform"
+    socials_file: "assets/social/tkk_socials.png"
+    enabled: true
