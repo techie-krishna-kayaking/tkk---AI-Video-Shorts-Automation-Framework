@@ -87,6 +87,15 @@ class AssetsConfig(BaseModel):
     overlays_dir: str = "assets/overlays"
 
 
+class BrandingConfig(BaseModel):
+    """Global branding overlay settings shared across all render flows."""
+
+    overlay_width_frac: float = 0.22
+    overlay_opacity: float = 0.90
+    longform_margin: int = 30
+    shorts_bottom_margin: int = 24
+
+
 class TrendingProviderConfig(BaseModel):
     enabled: bool = False
     provider_type: str = "filesystem"  # filesystem | remote_manifest | pixabay_audio
@@ -139,6 +148,7 @@ class ChannelConfig(BaseModel):
     socials_file: str = ""
     social_footer: str = ""  # legacy compat
     intro_text: str = ""
+    vlog_shorts_editing: str = "editing1"  # editing1, editing2, or both (generate both styles)
     hook_keywords: list[str] = Field(default_factory=list)
     upload_enabled: bool = False
     youtube: YouTubeChannelConfig = Field(default_factory=YouTubeChannelConfig)
@@ -195,6 +205,7 @@ class AppConfig(BaseModel):
     output: OutputConfig = Field(default_factory=OutputConfig)
     input: InputConfig = Field(default_factory=InputConfig)
     assets: AssetsConfig = Field(default_factory=AssetsConfig)
+    branding: BrandingConfig = Field(default_factory=BrandingConfig)
     trip: TripConfig = Field(default_factory=TripConfig)
     shorts_overlay: ShortsOverlayConfig = Field(default_factory=ShortsOverlayConfig)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)

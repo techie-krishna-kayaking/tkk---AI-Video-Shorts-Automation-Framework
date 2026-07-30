@@ -98,6 +98,12 @@ assets:
   fonts_dir: "assets/fonts"
   overlays_dir: "assets/overlays"
 
+branding:
+  overlay_width_frac: 0.22
+  overlay_opacity: 0.90
+  longform_margin: 30
+  shorts_bottom_margin: 24
+
 # ====================================================
 # Telegram status notifications
 # ====================================================

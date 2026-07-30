@@ -54,6 +54,15 @@ BG_AUDIO_CHAIN = (
     "afftdn=nf=-22"
 )
 
+def _branding_values() -> tuple[float, float, int, int]:
+    branding = get_config().branding
+    return (
+        branding.overlay_width_frac,
+        branding.overlay_opacity,
+        branding.longform_margin,
+        branding.shorts_bottom_margin,
+    )
+
 
 @dataclass
 class MediaItem:
@@ -296,6 +305,7 @@ def _normalize_video_segment(
     blur_bg: bool,
     overlay_path: Path | None = None,
 ) -> None:
+    branding_overlay_width_frac, branding_overlay_opacity, branding_longform_margin, _ = _branding_values()
     src_w, src_h = _get_video_dimensions(item.path)
     target_ar = (width / height) if height else 0.0
     src_ar = (src_w / src_h) if src_h else target_ar
@@ -322,14 +332,14 @@ def _normalize_video_segment(
     has_overlay = overlay_path is not None and overlay_path.exists()
     if has_overlay:
         cmd.extend(["-i", str(overlay_path)])
-        overlay_w = max(120, int(width * 0.22))
-        # Socials watermark sits in the TOP-RIGHT corner (40px margin).
+        overlay_w = max(120, int(width * branding_overlay_width_frac))
+        # Socials watermark sits in the TOP-LEFT corner for longform branding.
         filter_complex += (
-            f";[1:v]scale={overlay_w}:-1,format=rgba,colorchannelmixer=aa=0.88[wm]"
+            f";[1:v]scale={overlay_w}:-1,format=rgba,colorchannelmixer=aa={branding_overlay_opacity}[wm]"
             f";[wm]split=2[wm_main][wm_glow_src]"
-            f";[wm_glow_src]gblur=sigma=10,colorchannelmixer=aa=0.55[wm_glow]"
-            f";[vbase][wm_glow]overlay=W-w-40:40[vtmp]"
-            f";[vtmp][wm_main]overlay=W-w-40:40[vout]"
+            f";[wm_glow_src]gblur=sigma=10,colorchannelmixer=aa=0.35[wm_glow]"
+            f";[vbase][wm_glow]overlay={branding_longform_margin}:{branding_longform_margin}[vtmp]"
+            f";[vtmp][wm_main]overlay={branding_longform_margin}:{branding_longform_margin}[vout]"
         )
     else:
         filter_complex += ";[vbase]copy[vout]"
@@ -383,6 +393,7 @@ def _normalize_photo_segment(
     ken_burns_enabled: bool,
     overlay_path: Path | None = None,
 ) -> None:
+    branding_overlay_width_frac, branding_overlay_opacity, branding_longform_margin, _ = _branding_values()
     if ken_burns_enabled:
         overlay_expr = (
             "overlay="
@@ -414,13 +425,13 @@ def _normalize_photo_segment(
     has_overlay = overlay_path is not None and overlay_path.exists()
     if has_overlay:
         cmd.extend(["-i", str(overlay_path)])
-        overlay_w = max(120, int(width * 0.22))
+        overlay_w = max(120, int(width * branding_overlay_width_frac))
         filter_complex += (
-            f";[2:v]scale={overlay_w}:-1,format=rgba,colorchannelmixer=aa=0.88[wm]"
+            f";[2:v]scale={overlay_w}:-1,format=rgba,colorchannelmixer=aa={branding_overlay_opacity}[wm]"
             f";[wm]split=2[wm_main][wm_glow_src]"
-            f";[wm_glow_src]gblur=sigma=10,colorchannelmixer=aa=0.55[wm_glow]"
-            f";[vbase][wm_glow]overlay=W-w-40:40[vtmp]"
-            f";[vtmp][wm_main]overlay=W-w-40:40[vout]"
+            f";[wm_glow_src]gblur=sigma=10,colorchannelmixer=aa=0.35[wm_glow]"
+            f";[vbase][wm_glow]overlay={branding_longform_margin}:{branding_longform_margin}[vtmp]"
+            f";[vtmp][wm_main]overlay={branding_longform_margin}:{branding_longform_margin}[vout]"
         )
     else:
         filter_complex += ";[vbase]copy[vout]"
@@ -777,11 +788,19 @@ def create_trip_scenic_highlight(
         input_idx += 1
 
     if has_socials:
-        filter_parts.append(f"[{input_idx}:v]scale=750:-1,format=rgba,colorchannelmixer=aa=0.92[soc]")
+        branding_overlay_width_frac, branding_overlay_opacity, _, branding_shortform_margin = _branding_values()
+        social_w = max(220, int(1080 * branding_overlay_width_frac))
+        filter_parts.append(
+            f"[{input_idx}:v]scale={social_w}:-1,format=rgba,colorchannelmixer=aa={branding_overlay_opacity}[soc]"
+        )
         filter_parts.append("[soc]split=2[soc_main][soc_glow_src]")
         filter_parts.append("[soc_glow_src]gblur=sigma=10,colorchannelmixer=aa=0.25[soc_glow]")
-        filter_parts.append(f"{current}[soc_glow]overlay=(W-w)/2:H-h-240[vsocglow]")
-        filter_parts.append("[vsocglow][soc_main]overlay=(W-w)/2:H-h-250[vout]")
+        filter_parts.append(
+            f"{current}[soc_glow]overlay=(W-w)/2:H-h-{branding_shortform_margin + 10}[vsocglow]"
+        )
+        filter_parts.append(
+            f"[vsocglow][soc_main]overlay=(W-w)/2:H-h-{branding_shortform_margin}[vout]"
+        )
     else:
         filter_parts.append(f"{current}copy[vout]")
 

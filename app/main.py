@@ -31,7 +31,15 @@ from app.caption_generator import CaptionGenerator
 from app.clip_selector import ClipSelector
 from app.cleanup import move_files_to_trash
 from app.detector import VideoCategory, detect_video
-from app.longform import LongformResult, discover_subfolders, generate_longform, sort_gopro_chronological
+from app.longform import (
+    LongformResult,
+    discover_subfolders,
+    generate_camera_recording_longform,
+    generate_cooking_recording_longform,
+    generate_cooking_shortform,
+    generate_longform,
+    sort_gopro_chronological,
+)
 from app.renderer import Renderer
 from app.scheduler import Scheduler
 from app.transcriber import Transcriber
@@ -424,6 +432,8 @@ def process(
     overlay_path: Path | None = None
     hook_text = ""
     channel_type = "tutorial"
+    gopro_layout = "classic"
+    gopro_editing_mode = "editing1"
     if ch_config:
         socials = ch_config.socials_file or ch_config.social_footer
         if socials:
@@ -431,41 +441,82 @@ def process(
         hook_text = ch_config.intro_text
         # Renderer currently supports tutorial/gopro layouts; map vlog -> gopro.
         channel_type = "gopro" if ch_config.type == "vlog" else ch_config.type
+        raw_editing = (ch_config.vlog_shorts_editing or "editing1").strip().lower()
+        if channel_type == "gopro":
+            if raw_editing in ("both", "editing_both", "all", "dual"):
+                gopro_editing_mode = "both"
+                gopro_layout = "classic"
+            elif raw_editing in ("editing2", "orange_70_15_15", "v2"):
+                gopro_editing_mode = "editing2"
+                gopro_layout = "orange_70_15_15"
+            else:
+                gopro_editing_mode = "editing1"
+                gopro_layout = "classic"
 
     max_workers = max(1, int(render_workers) if render_workers else int(getattr(config.processing, "max_workers", 4)))
 
     with create_progress() as progress:
-        task = progress.add_task("Rendering clips...", total=len(selection.clips))
-        results_map: dict[int, list] = {}
+        render_variants: list[tuple[str, str]] = [(video_name, gopro_layout)]
+        if channel_type == "gopro" and gopro_editing_mode == "both":
+            render_variants = [
+                (f"{video_name}_editing1", "classic"),
+                (f"{video_name}_editing2", "orange_70_15_15"),
+            ]
 
-        def _render_single(idx: int, clip):
-            local_renderer = Renderer()
-            return local_renderer.render_clips(
-                video_path=video_path,
-                clips=[clip],
-                video_info=video_info,
-                output_dir=output_dir,
-                output_name=video_name,
-                subtitle_paths={0: subtitle_paths[idx]} if idx in subtitle_paths else None,
-                overlay_path=overlay_path,
-                hook_text=hook_text,
-                channel_type=channel_type,
-            )
-
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_map = {
-                executor.submit(_render_single, idx, clip): idx
-                for idx, clip in enumerate(selection.clips)
-            }
-
-            for future in as_completed(future_map):
-                idx = future_map[future]
-                results_map[idx] = future.result()
-                progress.advance(task)
-
+        task = progress.add_task("Rendering clips...", total=len(selection.clips) * len(render_variants))
         results = []
-        for idx in range(len(selection.clips)):
-            results.extend(results_map.get(idx, []))
+
+        if len(render_variants) == 1:
+            variant_name, variant_layout = render_variants[0]
+            results_map: dict[int, list] = {}
+
+            def _render_single(idx: int, clip):
+                local_renderer = Renderer()
+                return local_renderer.render_clips(
+                    video_path=video_path,
+                    clips=[clip],
+                    video_info=video_info,
+                    output_dir=output_dir,
+                    output_name=variant_name,
+                    subtitle_paths={0: subtitle_paths[idx]} if idx in subtitle_paths else None,
+                    overlay_path=overlay_path,
+                    hook_text=hook_text,
+                    channel_type=channel_type,
+                    gopro_layout=variant_layout,
+                )
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_map = {
+                    executor.submit(_render_single, idx, clip): idx
+                    for idx, clip in enumerate(selection.clips)
+                }
+
+                for future in as_completed(future_map):
+                    idx = future_map[future]
+                    results_map[idx] = future.result()
+                    progress.advance(task)
+
+            for idx in range(len(selection.clips)):
+                results.extend(results_map.get(idx, []))
+        else:
+            # Render each style in a separate deterministic pass so part-numbering
+            # is stable and both styles are always produced for every selected clip.
+            for variant_name, variant_layout in render_variants:
+                local_renderer = Renderer()
+                variant_results = local_renderer.render_clips(
+                    video_path=video_path,
+                    clips=selection.clips,
+                    video_info=video_info,
+                    output_dir=output_dir,
+                    output_name=variant_name,
+                    subtitle_paths=subtitle_paths if subtitle_paths else None,
+                    overlay_path=overlay_path,
+                    hook_text=hook_text,
+                    channel_type=channel_type,
+                    gopro_layout=variant_layout,
+                )
+                results.extend(variant_results)
+                progress.advance(task, advance=len(selection.clips))
 
     # Summary
     successful = sum(1 for r in results if r.success)
@@ -1688,6 +1739,243 @@ def longform(
         total_time=total_time,
         output_base=output_base,
     )
+
+
+@app.command(name="camera-longform")
+def camera_longform(
+    video_path: Path = typer.Argument(..., help="Input camera-recording video file."),
+    channel: Optional[str] = typer.Option(None, "--channel", "-c", help="Optional channel for output folder routing."),
+    output_path: Optional[Path] = typer.Option(None, "--output", "-o", help="Optional explicit output video path."),
+    silence_threshold_db: float = typer.Option(-40.0, "--silence-threshold-db", help="Silence detection threshold (dB)."),
+    silence_min_seconds: float = typer.Option(0.003, "--silence-min-seconds", help="Minimum silence duration to chop."),
+    words_per_line: int = typer.Option(4, "--words-per-line", help="Subtitle words shown at once (4-5 recommended)."),
+) -> None:
+    """Long-form camera recording flow with smooth zoom, silence chopping, and burned subtitles."""
+    _init()
+    config = get_config()
+
+    if not video_path.exists():
+        rich_console.print(f"[bold red]Video not found: {video_path}[/bold red]")
+        raise typer.Exit(1)
+
+    ch_config = config.channels.get(channel) if channel else None
+    overlay_path: Path | None = None
+    if ch_config:
+        socials = ch_config.socials_file or ch_config.social_footer
+        if socials:
+            candidate = Path(socials)
+            if candidate.exists():
+                overlay_path = candidate
+            else:
+                rich_console.print(f"[yellow]Warning: socials file not found: {candidate}[/yellow]")
+
+    if output_path is None:
+        if ch_config and ch_config.output_folder:
+            out_dir = Path(ch_config.output_folder) / "longform_camera"
+        else:
+            out_dir = Path(config.output.base_dir) / "camera_longform"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        output_path = out_dir / f"{sanitize_filename(video_path.stem)}_camera_longform.mp4"
+    else:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    rich_console.print("\n[bold cyan]Camera Long-form Rendering[/bold cyan]")
+    rich_console.print(f"  Input:  {video_path}")
+    rich_console.print(f"  Output: {output_path}")
+    rich_console.print("  Profile: 1080x1920 @ 30fps, smooth zoom loop, burned EN captions")
+    rich_console.print("=" * 60)
+
+    result = generate_camera_recording_longform(
+        input_video=video_path,
+        output_path=output_path,
+        silence_threshold_db=silence_threshold_db,
+        silence_min_duration=silence_min_seconds,
+        words_per_line=words_per_line,
+        overlay_path=overlay_path,
+    )
+
+    if not result.success:
+        rich_console.print("[bold red]Camera long-form render failed.[/bold red]")
+        for err in result.errors:
+            rich_console.print(f"  - {err}")
+        raise typer.Exit(1)
+
+    rich_console.print("[bold green]Camera long-form render complete.[/bold green]")
+    rich_console.print(f"  Duration: {result.output_duration:.1f}s")
+    rich_console.print(f"  Size: {result.file_size / 1024 / 1024:.1f} MB")
+    if result.errors:
+        rich_console.print("  [yellow]Warnings:[/yellow]")
+        for err in result.errors:
+            rich_console.print(f"    - {err}")
+
+
+@app.command(name="cooking-longform")
+def cooking_longform(
+    input_path: Path = typer.Argument(..., help="Input cooking video file or folder containing multiple clips."),
+    channel: Optional[str] = typer.Option(None, "--channel", "-c", help="Optional channel for output folder routing."),
+    output_path: Optional[Path] = typer.Option(None, "--output", "-o", help="Optional explicit output video path."),
+    silence_threshold_db: float = typer.Option(-40.0, "--silence-threshold-db", help="Silence detection threshold (dB)."),
+    silence_min_seconds: float = typer.Option(0.003, "--silence-min-seconds", help="Minimum silence duration to chop."),
+    no_speech_gap_seconds: float = typer.Option(2.0, "--no-speech-gap-seconds", help="Chop no-English-speech gaps at or above this duration."),
+    max_target_minutes: float = typer.Option(15.0, "--max-target-minutes", help="Soft cap target duration by trimming extra dead space."),
+) -> None:
+    """Cooking long-form flow with chronological merge, silence trimming, smooth zoom, and crisp audio."""
+    _init()
+    config = get_config()
+
+    if not input_path.exists():
+        rich_console.print(f"[bold red]Input path not found: {input_path}[/bold red]")
+        raise typer.Exit(1)
+
+    if input_path.is_dir():
+        videos = sorted(
+            f for f in input_path.rglob("*")
+            if f.is_file() and f.suffix.lower() in {".mp4", ".mov", ".mkv", ".avi", ".m4v"}
+        )
+    else:
+        videos = [input_path]
+
+    if not videos:
+        rich_console.print("[bold red]No video files found in the input path.[/bold red]")
+        raise typer.Exit(1)
+
+    ch_config = config.channels.get(channel) if channel else None
+    overlay_path: Path | None = None
+    if ch_config:
+        socials = ch_config.socials_file or ch_config.social_footer
+        if socials:
+            candidate = Path(socials)
+            if candidate.exists():
+                overlay_path = candidate
+            else:
+                rich_console.print(f"[yellow]Warning: socials file not found: {candidate}[/yellow]")
+
+    if output_path is None:
+        if ch_config and ch_config.output_folder:
+            out_dir = Path(ch_config.output_folder) / "longform_cooking"
+        else:
+            out_dir = Path(config.output.base_dir) / "cooking_longform"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        base_name = sanitize_filename(input_path.stem if input_path.is_file() else input_path.name)
+        output_path = out_dir / f"{base_name}_cooking_longform.mp4"
+    else:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    rich_console.print("\n[bold cyan]Cooking Long-form Rendering[/bold cyan]")
+    rich_console.print(f"  Inputs: {len(videos)} clip(s)")
+    rich_console.print(f"  Output: {output_path}")
+    rich_console.print("  Profile: 1080x1920 @ 30fps, smooth zoom loop, silence + no-speech trimming")
+    rich_console.print("=" * 60)
+
+    result = generate_cooking_recording_longform(
+        input_videos=videos,
+        output_path=output_path,
+        silence_threshold_db=silence_threshold_db,
+        silence_min_duration=silence_min_seconds,
+        no_speech_gap_seconds=no_speech_gap_seconds,
+        max_target_minutes=max_target_minutes,
+        overlay_path=overlay_path,
+    )
+
+    if not result.success:
+        rich_console.print("[bold red]Cooking long-form render failed.[/bold red]")
+        for err in result.errors:
+            rich_console.print(f"  - {err}")
+        raise typer.Exit(1)
+
+    rich_console.print("[bold green]Cooking long-form render complete.[/bold green]")
+    rich_console.print(f"  Duration: {result.output_duration:.1f}s")
+    rich_console.print(f"  Size: {result.file_size / 1024 / 1024:.1f} MB")
+    if result.errors:
+        rich_console.print("  [yellow]Warnings:[/yellow]")
+        for err in result.errors:
+            rich_console.print(f"    - {err}")
+
+
+@app.command(name="cooking-shortform")
+def cooking_shortform(
+    input_path: Path = typer.Argument(..., help="Input cooking video file or folder containing multiple clips."),
+    channel: Optional[str] = typer.Option(None, "--channel", "-c", help="Optional channel for output folder routing."),
+    output_path: Optional[Path] = typer.Option(None, "--output", "-o", help="Optional explicit output video path."),
+    silence_threshold_db: float = typer.Option(-40.0, "--silence-threshold-db", help="Silence detection threshold (dB)."),
+    silence_min_seconds: float = typer.Option(0.003, "--silence-min-seconds", help="Minimum silence duration to chop."),
+    no_speech_gap_seconds: float = typer.Option(2.0, "--no-speech-gap-seconds", help="Chop no-English-speech gaps at or above this duration."),
+    min_target_seconds: float = typer.Option(90.0, "--min-target-seconds", help="Preferred minimum output length in seconds."),
+    max_target_seconds: float = typer.Option(120.0, "--max-target-seconds", help="Maximum output length in seconds."),
+) -> None:
+    """Cooking short-form flow with chronological merge, strong trimming, smooth zoom, and crisp audio."""
+    _init()
+    config = get_config()
+
+    if not input_path.exists():
+        rich_console.print(f"[bold red]Input path not found: {input_path}[/bold red]")
+        raise typer.Exit(1)
+
+    if input_path.is_dir():
+        videos = sorted(
+            f for f in input_path.rglob("*")
+            if f.is_file() and f.suffix.lower() in {".mp4", ".mov", ".mkv", ".avi", ".m4v"}
+        )
+    else:
+        videos = [input_path]
+
+    if not videos:
+        rich_console.print("[bold red]No video files found in the input path.[/bold red]")
+        raise typer.Exit(1)
+
+    ch_config = config.channels.get(channel) if channel else None
+    overlay_path: Path | None = None
+    if ch_config:
+        socials = ch_config.socials_file or ch_config.social_footer
+        if socials:
+            candidate = Path(socials)
+            if candidate.exists():
+                overlay_path = candidate
+            else:
+                rich_console.print(f"[yellow]Warning: socials file not found: {candidate}[/yellow]")
+
+    if output_path is None:
+        if ch_config and ch_config.output_folder:
+            out_dir = Path(ch_config.output_folder) / "shortform_cooking"
+        else:
+            out_dir = Path(config.output.base_dir) / "cooking_shortform"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        base_name = sanitize_filename(input_path.stem if input_path.is_file() else input_path.name)
+        output_path = out_dir / f"{base_name}_cooking_shortform.mp4"
+    else:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    rich_console.print("\n[bold cyan]Cooking Short-form Rendering[/bold cyan]")
+    rich_console.print(f"  Inputs: {len(videos)} clip(s)")
+    rich_console.print(f"  Output: {output_path}")
+    rich_console.print("  Profile: 1920x1080 @ 30fps, smooth zoom loop, silence + no-speech trimming")
+    rich_console.print(f"  Target duration: {min_target_seconds:.0f}-{max_target_seconds:.0f}s")
+    rich_console.print("=" * 60)
+
+    result = generate_cooking_shortform(
+        input_videos=videos,
+        output_path=output_path,
+        silence_threshold_db=silence_threshold_db,
+        silence_min_duration=silence_min_seconds,
+        no_speech_gap_seconds=no_speech_gap_seconds,
+        min_target_seconds=min_target_seconds,
+        max_target_seconds=max_target_seconds,
+        overlay_path=overlay_path,
+    )
+
+    if not result.success:
+        rich_console.print("[bold red]Cooking short-form render failed.[/bold red]")
+        for err in result.errors:
+            rich_console.print(f"  - {err}")
+        raise typer.Exit(1)
+
+    rich_console.print("[bold green]Cooking short-form render complete.[/bold green]")
+    rich_console.print(f"  Duration: {result.output_duration:.1f}s")
+    rich_console.print(f"  Size: {result.file_size / 1024 / 1024:.1f} MB")
+    if result.errors:
+        rich_console.print("  [yellow]Warnings:[/yellow]")
+        for err in result.errors:
+            rich_console.print(f"    - {err}")
 
 
 def _print_longform_report(

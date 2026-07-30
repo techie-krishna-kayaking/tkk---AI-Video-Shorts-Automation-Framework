@@ -3,6 +3,10 @@
 # ====================================================
 # Each channel maps to an input folder, output folder,
 # and a socials overlay image for branding.
+# For vlog/gopro channels, vlog_shorts_editing supports:
+# - editing1: current style (default, unchanged)
+# - editing2: orange background with 15% top caption + 70% zoomed video + 15% bottom CTA/socials
+# - both: generate both editing1 and editing2 variants in the same run
 # ====================================================
 
 channels:
@@ -13,6 +17,7 @@ channels:
     input_folder: "input/krgd_vlogs"
     output_folder: "output/krgd_vlogs"
     socials_file: "assets/social/krgd_vlogs.png"
+    vlog_shorts_editing: "both"
     intro_text: ""
     hook_keywords:
       - "amazing"

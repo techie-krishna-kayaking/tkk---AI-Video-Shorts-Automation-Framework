@@ -164,6 +164,87 @@ python3 -m app.main reset-schedule --all          # full reset (schedule + histo
 **`--fast`** uses the tiny Whisper model (~2× faster); omit it for best transcription/caption quality. **`caffeinate -dimsu`** keeps macOS awake during long runs. See [Other CLI Commands](#other-cli-commands) for long-form, watch, and single-video commands.
 
 ---
+## 📁 Video Editing Flows (Current Source of Truth)
+
+This section documents the current behavior implemented in the codebase.
+
+### 1) Where to place inputs
+
+- Channel inputs must be placed under `input/<channel_id>/`.
+- Channel IDs and their folders are configured in `configs/channels.yaml`.
+- Nested folders are supported for vlog/gopro flows (example: `input/krgd_vlogs/2026-07-20/clip01.mp4`).
+- Supported video extensions include `.mp4`, `.mov`, `.avi`, `.mkv`, `.m4v`.
+
+### 2) Where outputs are generated
+
+- All outputs are written to each channel's `output_folder` from `configs/channels.yaml`.
+- Typical structure:
+  - Shorts/raw clips: `output/<channel_id>/..._partNNN.mp4`
+  - Platform variants: `output/<channel_id>/..._yt.mp4` and `output/<channel_id>/..._insta.mp4`
+  - Long-form (vlog command): `output/<channel_id>/longform/<folder>_vlog_longform.mp4`
+  - GoPro longform command: `output/<channel_id>/longform/<subfolder>_full.mp4`
+  - Camera flow: `output/<channel_id>/longform_camera/<name>_camera_longform.mp4`
+  - Cooking longform: `output/<channel_id>/longform_cooking/<name>_cooking_longform.mp4`
+  - Cooking shortform: `output/<channel_id>/shortform_cooking/<name>_cooking_shortform.mp4`
+
+### 3) Where to place socials branding images
+
+- Place PNG overlay images in `assets/social/`.
+- Wire each channel to its socials image using `socials_file` in `configs/channels.yaml`.
+- Example:
+
+```yaml
+channels:
+  krgd_vlogs:
+    socials_file: "assets/social/krgd_vlogs.png"
+```
+
+### 4) Branding overlay standardization (all flows)
+
+- Overlay width: `22%` of target frame width.
+- Overlay opacity: `0.90`.
+- Position policy:
+  - Longform flows: top-left, margin `30px`.
+  - Shorts flows: bottom-center, margin `24px`.
+
+### 5) Editing flows and output behavior
+
+| Flow | Command | Input path | Output path | Output video profile | Key editing features |
+|---|---|---|---|---|---|
+| Single-video shorts | `process` | any single file (usually under `input/<channel_id>/...`) | `output/<channel_id>/..._partNNN.mp4` | 9:16 shorts | Clip selection + render; channel-type aware layout; optional captions/subtitles |
+| Channel batch | `batch --channel <id>` | `input/<channel_id>/` (recursive) | `output/<channel_id>/` | Shorts | Processes all discovered videos; for vlog channels, routes to vlog workflow per subfolder |
+| All channels batch | `batch-all` | all configured channel input folders | each channel output folder | Mixed | Smart routing by type (`vlog`, `gopro`, `tutorial`), includes gopro longform pass |
+| Mixed-media vlog | `vlog` | `input/<channel_id>/<trip_or_date_folder>/` | `output/<channel_id>/` + `output/<channel_id>/longform/` | Shorts + longform | Parallel execution: longform generation + shorts generation; then platform exports |
+| Mixed-media vlog (music-only) | `vlog-music` | same as `vlog` | same as `vlog` | Shorts + longform | Drops raw audio; uses `assets/bgmusic/yt` for YouTube outputs and `assets/bgmusic/insta` for Instagram outputs |
+| GoPro longform only | `longform --channel <gopro_channel>` | subfolders under channel input folder | `output/<channel_id>/longform/` | 1080x1920 @ 30fps | Chronological merge + smooth zoom + tuned audio + standardized top-left socials |
+| Camera recording longform | `camera-longform` | single video file | `output/<channel_id>/longform_camera/` (or `output/camera_longform/`) | 1080x1920 @ 30fps | Silence trimming, EN subtitle burn-in, smooth zoom loop, tuned voice audio |
+| Cooking recording longform | `cooking-longform` | single file or folder of clips | `output/<channel_id>/longform_cooking/` (or `output/cooking_longform/`) | 1080x1920 @ 30fps | Chronological merge, silence + no-speech trimming, smooth zoom, tuned cooking audio |
+| Cooking recording shortform | `cooking-shortform` | single file or folder of clips | `output/<channel_id>/shortform_cooking/` (or `output/cooking_shortform/`) | 1920x1080 @ 30fps | Aggressive trimming to target 90-120s, smooth zoom, tuned cooking audio, bottom-center socials |
+
+### 6) Shorts layout types (vlog/gopro)
+
+Set `vlog_shorts_editing` in `configs/channels.yaml`:
+
+- `editing1`: classic white letterbox style (existing behavior preserved).
+- `editing2`: orange style with `15%` top area + `70%` center video + `15%` bottom CTA/socials.
+- `both`: renders both variants in one run.
+
+When `both` is enabled, one source produces two sets:
+
+- `..._editing1_partNNN.mp4`
+- `..._editing2_partNNN.mp4`
+
+If 10 source shorts are selected, 20 output shorts are generated.
+
+### 7) Example input/output mapping
+
+| Input | Command | Output |
+|---|---|---|
+| `input/krgd_vlogs/2026-07-20/GH011251.MP4` | `process --channel krgd_vlogs` | `output/krgd_vlogs/2026-07-20_gh011251_part001.mp4` (+ variant files) |
+| `input/krgd_vlogs/2026-07-20/` | `vlog --channel krgd_vlogs` | Longform in `output/krgd_vlogs/longform/` + shorts/platform files in `output/krgd_vlogs/` |
+| `input/krishna_kayaking/2026-07-20/` | `longform --channel krishna_kayaking` | `output/krishna_kayaking/longform/2026-07-20_full.mp4` |
+
+---
 ## 🎛️ Multi-Channel Architecture
 
 The framework supports **multiple YouTube channels**, each with its own input folder, output folder, socials overlay, and YouTube credentials.
@@ -227,8 +308,13 @@ assets/bgmusic/                  ← Background music tracks
 | Channel Type | Rendering | Description |
 |---|---|---|
 | `tutorial` | Smart crop 16:9 → 9:16 | Face-aware cropping, fills the entire vertical frame |
-| `gopro` | White letterbox | Video centered on white 9:16 canvas (no camera area lost). Caption (`<folder> Part N`) at top; "WATCH THE FULL VIDEO" + YouTube logo below the video, right above the socials footer |
+| `gopro` | White letterbox (editing1) | Video centered on white 9:16 canvas (no camera area lost). Caption (`<folder> Part N`) at top; "WATCH THE FULL VIDEO" + YouTube logo below the video, right above the socials footer |
 | `vertical` | Trim only | Already 9:16, just split at boundaries |
+
+For `vlog`/`gopro` channels you can choose shorts layout style in `configs/channels.yaml` via `vlog_shorts_editing`:
+- `editing1` (default): current white-letterbox layout
+- `editing2`: orange background with 15% top caption area, 70% zoomed center video area, and 15% bottom CTA + socials area
+- `both`: generate both styles in one run (files are written as `<name>_editing1_partNNN.mp4` and `<name>_editing2_partNNN.mp4`)
 
 **Additionally for `gopro` channels:** Long-form videos are auto-generated per subfolder (see below).
 
@@ -289,7 +375,7 @@ Vlog Folder (videos + photos)
   |   - Chronological ordering          - Fixed 30s segments (0-30, 30-60, ...)
   |   - Normalize segments              - No motion/scene detection
   |     (blur only for non-16:9)        - Center layout (white bars)
-  |   - Social overlay (top-right)       - Caption + CTA + social (bottom)
+  |   - Social overlay (top-left)        - Caption + CTA + social (bottom)
   |   - Generate SRT + ASS captions     (independent of long-form)
   |   (full media duration)
   |
@@ -305,7 +391,7 @@ Vlog Folder (videos + photos)
 - **Parallel Execution**: Long-form and shorts render in separate worker threads simultaneously
 - **Fast Assembly**: Long-form uses FFmpeg stream copy concat (no re-encode)
 - **Aspect Ratio Preservation**: 16:9 sources are kept at full frame (no blur); only non-16:9 media gets the soft blurred-background pillarbox (no stretch/crop)
-- **Watermark**: Social overlay fixed top-right, 22% width, 88% opacity throughout long-form
+- **Watermark**: Social overlay standardized to 22% width, 90% opacity (top-left for longform, bottom-center for shorts)
 - **Shorts**: Source videos are sliced into back-to-back 30s segments (0-30, 30-60, ...) with no motion/scene detection; centered with white bars + caption/CTA/social
 - **Captions**: Auto-generated SRT + ASS for both long-form and all shorts
 - **Audio Split**: YT exports keep clean source audio, insta exports auto-mix BGM from `assets/bgmusic/`. Use the `vlog-music` command to drop raw audio entirely and use background music on every output (YT: `assets/bgmusic/yt`, Insta: `assets/bgmusic/insta`).
@@ -523,7 +609,7 @@ caffeinate -dimsu python3 -m app.main vlog input/krgd_vlogs/2026-05-19 \
 #### 5. Batch Process All Vlog Subfolders
 
 ```bash
-caffeinate -dimsu python3 -m app.main batch --channel krgd_vlogs --no-upload
+caffeinate -dimsu python3 -m app.main batch --channel krgd_vlogs
 ```
 
 **Processes:** All nested vlog subfolders in `input/krgd_vlogs/` using parallel longform + shorts workflow (no sequential waiting).
@@ -581,8 +667,8 @@ For **gopro** channels, the framework automatically generates long-form vlog com
 
 1. Each **subfolder** in the channel's input directory becomes one long-form video
 2. All clips within the subfolder are **sorted chronologically** (GoPro naming-aware: video number → chapter order)
-3. Clips are merged into a single continuous **16:9 landscape** video
-4. A **social branding watermark** is applied in the top-left corner (subtle, 15% width, 60% opacity)
+3. Clips are merged into a single continuous **1080x1920 vertical** video
+4. A **social branding watermark** is applied in the top-left corner (22% width, 90% opacity)
 5. Output uses high-quality encoding (CRF 14, slower preset, AAC 320k)
 
 ### GoPro File Ordering

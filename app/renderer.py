@@ -47,6 +47,7 @@ class RenderJob:
     hook_text: str = ""
     video_info: VideoInfo | None = None
     channel_type: str = "tutorial"  # tutorial | gopro — affects rendering layout
+    gopro_layout: str = "classic"   # classic | orange_70_15_15
 
 
 @dataclass
@@ -88,6 +89,9 @@ class Renderer:
         self._temp_links: list[Path] = []
         self._temp_files: list[Path] = []
         self._audio_stream_cache: dict[str, bool] = {}
+        self.branding_overlay_width_frac = config.branding.overlay_width_frac
+        self.branding_overlay_opacity = config.branding.overlay_opacity
+        self.branding_shorts_bottom_margin = config.branding.shorts_bottom_margin
 
         if self.gpu_available:
             logger.info("gpu_rendering_enabled", encoder=self.gpu_encoder)
@@ -386,10 +390,15 @@ class Renderer:
 
         # Add header image input for gopro mode
         header_input_idx: int | None = None
-        if job.channel_type == "gopro" and job.video_info and job.video_info.aspect_ratio == AspectRatio.LANDSCAPE:
+        is_gopro_layout2 = (job.channel_type == "gopro" and job.gopro_layout == "orange_70_15_15")
+        if job.channel_type == "gopro" and (
+            is_gopro_layout2
+            or (job.video_info and job.video_info.aspect_ratio == AspectRatio.LANDSCAPE)
+        ):
             header_path = self._generate_header_image(
                 "WATCH THE FULL VIDEO on YOUTUBE ▶",
                 hook_text=job.hook_text,
+                height=288 if is_gopro_layout2 else 380,
             )
             cmd.extend(["-i", str(header_path)])
             header_input_idx = input_count
@@ -397,7 +406,10 @@ class Renderer:
 
         # Add CTA image input (text + YouTube logo) for gopro mode
         cta_input_idx: int | None = None
-        if job.channel_type == "gopro" and job.video_info and job.video_info.aspect_ratio == AspectRatio.LANDSCAPE:
+        if job.channel_type == "gopro" and (
+            is_gopro_layout2
+            or (job.video_info and job.video_info.aspect_ratio == AspectRatio.LANDSCAPE)
+        ):
             cta_path = self._generate_cta_image()
             cmd.extend(["-i", str(cta_path)])
             cta_input_idx = input_count
@@ -583,6 +595,59 @@ class Renderer:
         filters: list[str] = []
         current_stream = "[0:v]"
 
+        # Alternate vlog/gopro layout: orange top/bottom bands (15% each),
+        # center video occupying 70% height, top caption, and bottom CTA+socials.
+        if job.channel_type == "gopro" and job.gopro_layout == "orange_70_15_15":
+            top_h = int(self.output_height * 0.15)
+            middle_h = int(self.output_height * 0.70)
+            bottom_h = self.output_height - top_h - middle_h
+            smooth_zoom = "1.1+0.1*cos(2*PI*t/12)"
+
+            filters.append(f"color=c=#F7941D:s={self.output_width}x{self.output_height}:r={self.fps}[bg]")
+            filters.append(
+                f"{current_stream}scale={self.output_width}:{middle_h}:force_original_aspect_ratio=increase[fitmid]"
+            )
+            filters.append(
+                f"[fitmid]scale='trunc(iw*{smooth_zoom}/2)*2':'trunc(ih*{smooth_zoom}/2)*2',"
+                f"crop={self.output_width}:{middle_h}:(iw-ow)/2:(ih-oh)/2,setsar=1[mid]"
+            )
+            filters.append(f"[bg][mid]overlay=0:{top_h}[midbg]")
+            current_stream = "[midbg]"
+
+            if header_input_idx is not None:
+                filters.append(f"[{header_input_idx}:v]scale={self.output_width}:-1[hdr]")
+                filters.append(f"{current_stream}[hdr]overlay=(W-w)/2:0[headed]")
+                current_stream = "[headed]"
+
+            if cta_input_idx is not None:
+                cta_w = int(self.output_width * 0.62)
+                cta_y = top_h + middle_h + max(4, int(bottom_h * 0.04))
+                filters.append(f"[{cta_input_idx}:v]scale={cta_w}:-1[ctaimg]")
+                filters.append(f"{current_stream}[ctaimg]overlay=(W-w)/2:{cta_y}[ctaed]")
+                current_stream = "[ctaed]"
+
+            if job.overlay_path and job.overlay_path.exists() and overlay_input_idx is not None:
+                socials_w = max(120, int(self.output_width * self.branding_overlay_width_frac))
+                filters.append(
+                    f"[{overlay_input_idx}:v]scale={socials_w}:-1,format=rgba,"
+                    f"colorchannelmixer=aa={self.branding_overlay_opacity}[ovl]"
+                )
+                filters.append(
+                    f"{current_stream}[ovl]overlay=(W-w)/2:H-h-{self.branding_shorts_bottom_margin}[overlaid]"
+                )
+                current_stream = "[overlaid]"
+
+            if filters:
+                last_filter = filters[-1]
+                if last_filter.endswith(current_stream):
+                    filters[-1] = last_filter[: -len(current_stream)] + "[vout]"
+                else:
+                    label_text = current_stream.strip("[]")
+                    idx = last_filter.rfind(f"[{label_text}]")
+                    if idx != -1:
+                        filters[-1] = last_filter[:idx] + "[vout]" + last_filter[idx + len(current_stream):]
+            return ";".join(filters)
+
         # For 16:9 -> 9:16 conversion
         if job.video_info and job.video_info.aspect_ratio == AspectRatio.LANDSCAPE:
 
@@ -718,11 +783,12 @@ class Renderer:
         # Add overlay image at bottom (social footer)
         if job.overlay_path and job.overlay_path.exists() and overlay_input_idx is not None:
             overlay_scale = (
-                f"[{overlay_input_idx}:v]scale={int(self.output_width * 0.96)}:-1[ovl]"
+                f"[{overlay_input_idx}:v]scale={max(120, int(self.output_width * self.branding_overlay_width_frac))}:-1,"
+                f"format=rgba,colorchannelmixer=aa={self.branding_overlay_opacity}[ovl]"
             )
             filters.append(overlay_scale)
             overlay_filter = (
-                f"{current_stream}[ovl]overlay=(W-w)/2:H-h-110[overlaid]"
+                f"{current_stream}[ovl]overlay=(W-w)/2:H-h-{self.branding_shorts_bottom_margin}[overlaid]"
             )
             filters.append(overlay_filter)
             current_stream = "[overlaid]"
@@ -755,6 +821,7 @@ class Renderer:
         overlay_path: Path | None = None,
         hook_text: str = "",
         channel_type: str = "tutorial",
+        gopro_layout: str = "classic",
     ) -> list[RenderResult]:
         """
         Render multiple clips from a video.
@@ -769,6 +836,7 @@ class Renderer:
             overlay_path: Social footer overlay image.
             hook_text: Default hook text for top overlay.
             channel_type: Channel type (tutorial/gopro) - affects rendering layout.
+            gopro_layout: gopro layout mode (classic/orange_70_15_15).
         """
         results: list[RenderResult] = []
         video_name = sanitize_filename(output_name) if output_name else sanitize_filename(video_path.stem)
@@ -820,6 +888,7 @@ class Renderer:
                 ),
                 video_info=video_info,
                 channel_type=channel_type,
+                gopro_layout=gopro_layout,
             )
 
             result = self.render_clip(job)
