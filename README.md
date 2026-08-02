@@ -216,7 +216,7 @@ editing_flows:
 | Cooking - Short Form | `run-flow --flow cooking_short_form` | from flow `input_folder` | flow `output_folder` | 1920x1080 @ 30fps | Aggressive trimming (90-120s target), smooth zoom, tuned cooking audio, bottom-center socials |
 | Tutorial - Long Form | `run-flow --flow tutorial_long_form` | from flow `input_folder` | flow `output_folder` | 1080x1920 @ 30fps | Camera-style longform flow with subtitles and top-left socials |
 | Tutorial - Short Form | `run-flow --flow tutorial_short_form` | from flow `input_folder` | flow `output_folder` | 9:16 shorts | Tutorial short rendering with captions/subtitles and bottom-center socials |
-| Hyperlapse - Merge | `run-flow --flow hyperlapse_merge` | from flow `input_folder` | flow `output_folder` | source-standard orientation @ 30fps | Name-ordered video merge, light color pop correction, then images with 1s zoom + swipe transitions, last image 2s, then append `assets/hyperlapse_outro.mp4` |
+| Hyperlapse - Merge | `run-flow --flow hyperlapse_merge` | from flow `input_folder` | flow `output_folder` | minimum 2K output (landscape: 2560x1440, portrait: 1440x2560) @ 30fps | Name-ordered video merge, light color pop correction, then images with 1s zoom + swipe transitions (images are center-fit; uncovered frame area is white padding), last image 2s, then append `assets/hyperlapse_outro.mp4` |
 
 ### 6) Shorts layout types (vlog/gopro)
 

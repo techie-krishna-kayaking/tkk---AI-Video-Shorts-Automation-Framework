@@ -90,6 +90,8 @@ def _safe_ffmpeg_path(path: Path) -> str:
 
 
 def _ensure_even(value: int) -> int:
+    if value <= 2:
+        return 2
     return value if value % 2 == 0 else value - 1
 
 
@@ -101,18 +103,34 @@ def _probe_first_image_dimensions(image_path: Path) -> tuple[int, int]:
         return 0, 0
 
 
+def _minimum_2k_canvas_for_orientation(width: int, height: int) -> tuple[int, int]:
+    is_portrait = height > width
+    return (1440, 2560) if is_portrait else (2560, 1440)
+
+
+def _enforce_min_2k_canvas(width: int, height: int) -> tuple[int, int]:
+    if width <= 0 or height <= 0:
+        return 2560, 1440
+
+    min_w, min_h = _minimum_2k_canvas_for_orientation(width, height)
+    scale = max(min_w / float(width), min_h / float(height), 1.0)
+    out_w = _ensure_even(int(round(width * scale)))
+    out_h = _ensure_even(int(round(height * scale)))
+    return out_w, out_h
+
+
 def _pick_hyperlapse_canvas(videos: list[Path], images: list[Path]) -> tuple[int, int]:
     if videos:
         w, h = _get_video_dimensions(videos[0])
         if w > 0 and h > 0:
-            return _ensure_even(w), _ensure_even(h)
+            return _enforce_min_2k_canvas(w, h)
 
     if images:
         w, h = _probe_first_image_dimensions(images[0])
         if w > 0 and h > 0:
-            return _ensure_even(w), _ensure_even(h)
+            return _enforce_min_2k_canvas(w, h)
 
-    return 1920, 1080
+    return 2560, 1440
 
 
 def _normalize_hyperlapse_video_segment(
@@ -261,8 +279,9 @@ def _build_hyperlapse_images_montage(
         frame_count = max(1, int(round(input_duration * fps)))
         filter_parts.append(
             f"[{idx}:v]"
-            f"scale={width}:{height}:force_original_aspect_ratio=increase,"
-            f"crop={width}:{height},"
+            # Keep non-matching aspect images centered with white padding.
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:white,"
             "zoompan="
             f"z='min(zoom+0.0015,1.10)':"
             "x='iw/2-(iw/zoom/2)':"
