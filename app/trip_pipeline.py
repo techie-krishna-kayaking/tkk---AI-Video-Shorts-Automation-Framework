@@ -120,17 +120,9 @@ def _enforce_min_2k_canvas(width: int, height: int) -> tuple[int, int]:
 
 
 def _pick_hyperlapse_canvas(videos: list[Path], images: list[Path]) -> tuple[int, int]:
-    if videos:
-        w, h = _get_video_dimensions(videos[0])
-        if w > 0 and h > 0:
-            return _enforce_min_2k_canvas(w, h)
-
-    if images:
-        w, h = _probe_first_image_dimensions(images[0])
-        if w > 0 and h > 0:
-            return _enforce_min_2k_canvas(w, h)
-
-    return 2560, 1440
+    # Product rule: hyperlapse output is always portrait.
+    # Keep 2K minimum while preserving a standard 9:16 frame.
+    return 1440, 2560
 
 
 def _normalize_hyperlapse_video_segment(
@@ -255,9 +247,10 @@ def _build_hyperlapse_images_montage(
     if not images:
         raise ValueError("No images provided for montage")
 
-    transition = 0.35
+    # Slightly longer blend makes the swipe transition feel smoother.
+    transition = 0.55
     durations = [1.0 for _ in images]
-    durations[-1] = 2.0
+    durations[-1] = 3.0
 
     cmd = ["ffmpeg", "-y"]
     for idx, image_path in enumerate(images):
@@ -276,17 +269,30 @@ def _build_hyperlapse_images_montage(
     for idx, _image_path in enumerate(images):
         clip_duration = durations[idx]
         input_duration = clip_duration + (transition if idx < len(images) - 1 else 0.0)
-        frame_count = max(1, int(round(input_duration * fps)))
+        zoom_peak = 0.06
+        zoom_expr = (
+            f"(1+{zoom_peak:.4f}*(1-cos(2*PI*min(t/{input_duration:.4f},1)))/2)"
+        )
+        if idx == len(images) - 1:
+            # Last image: 1s smooth center zoom-in, 1s hold, 1s smooth center zoom-out.
+            zoom_expr = (
+                f"if(lt(t,1),"
+                f"1+{zoom_peak:.4f}*(1-cos(PI*t))/2,"
+                f"if(lt(t,2),"
+                f"1+{zoom_peak:.4f},"
+                f"if(lt(t,3),"
+                f"1+{zoom_peak:.4f}*(1+cos(PI*(t-2)))/2,"
+                f"1)))"
+            )
         filter_parts.append(
             f"[{idx}:v]"
             # Keep non-matching aspect images centered with white padding.
             f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:white,"
-            "zoompan="
-            f"z='min(zoom+0.0015,1.10)':"
-            "x='iw/2-(iw/zoom/2)':"
-            "y='ih/2-(ih/zoom/2)':"
-            f"d={frame_count}:s={width}x{height}:fps={fps},"
+            # Smooth center zoom-in then zoom-out using one cosine-eased cycle.
+            f"scale='trunc(iw*{zoom_expr}/2)*2':'trunc(ih*{zoom_expr}/2)*2':eval=frame,"
+            f"crop={width}:{height}:(iw-{width})/2:(ih-{height})/2,"
+            f"fps={fps},"
             f"trim=duration={input_duration:.3f},"
             "setpts=PTS-STARTPTS,format=yuv420p"
             f"[v{idx}]"
@@ -385,9 +391,52 @@ def _normalize_outro_segment(
     subprocess.run(cmd, check=True, capture_output=True, text=True)
 
 
+def _apply_hyperlapse_social_overlay(
+    source_video: Path,
+    output_video: Path,
+    overlay_path: Path,
+    width: int,
+) -> None:
+    # Position/size tuned for portrait hyperlapse: laterally centered near bottom.
+    overlay_width = max(240, int(width * 0.58))
+    bottom_margin = 130
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(source_video),
+        "-i",
+        str(overlay_path),
+        "-filter_complex",
+        (
+            f"[1:v]scale={overlay_width}:-1:flags=lanczos,format=rgba,colorchannelmixer=aa=0.98[wm];"
+            f"[0:v][wm]overlay=(W-w)/2:H-h-{bottom_margin}:format=auto[vout]"
+        ),
+        "-map",
+        "[vout]",
+        "-map",
+        "0:a?",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "slow",
+        "-crf",
+        "16",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "copy",
+        "-movflags",
+        "+faststart",
+        str(output_video),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+
 def create_hyperlapse_merge(
     input_folder: Path,
     output_path: Path,
+    overlay_path: Path | None = None,
     outro_path: Path | None = None,
 ) -> HyperlapseMergeResult:
     """Create one hyperlapse merge video from ordered videos + images and append outro."""
@@ -402,8 +451,8 @@ def create_hyperlapse_merge(
             errors=[f"Input folder not found: {input_folder}"],
         )
 
-    # Accept both direct files and nested layouts (for example: input/flows/hyperlapse/merge).
-    all_files = [p for p in sorted(input_folder.rglob("*")) if p.is_file()]
+    # Process one topic folder at a time: only consume direct files from that folder.
+    all_files = [p for p in sorted(input_folder.iterdir()) if p.is_file()]
     videos = [p for p in all_files if p.suffix.lower() in VIDEO_EXTENSIONS]
     images = [p for p in all_files if p.suffix.lower() in PHOTO_EXTENSIONS]
 
@@ -422,13 +471,12 @@ def create_hyperlapse_merge(
     if outro_path is None:
         outro_path = Path("assets") / "hyperlapse_outro.mp4"
 
-    if not outro_path.exists():
-        return HyperlapseMergeResult(
-            output_path=output_path,
-            success=False,
-            videos_merged=len(videos),
-            images_merged=len(images),
-            errors=[f"Outro file not found: {outro_path}"],
+    has_outro = outro_path.exists()
+    if not has_outro:
+        logger.warning(
+            "hyperlapse_outro_missing_skipped",
+            requested_outro=str(outro_path),
+            input_folder=str(input_folder),
         )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -483,17 +531,61 @@ def create_hyperlapse_merge(
             )
             final_segments.append(montage_path)
 
-        normalized_outro = tmp_root / "outro_norm.mp4"
-        _normalize_outro_segment(
-            outro_path=outro_path,
-            output_path=normalized_outro,
-            width=width,
-            height=height,
-            fps=fps,
-        )
-        final_segments.append(normalized_outro)
+        if has_outro:
+            normalized_outro = tmp_root / "outro_norm.mp4"
+            _normalize_outro_segment(
+                outro_path=outro_path,
+                output_path=normalized_outro,
+                width=width,
+                height=height,
+                fps=fps,
+            )
+            final_segments.append(normalized_outro)
 
-        _concat_segments(final_segments, output_path, reencode=True, fps=fps)
+        merged_output = tmp_root / "hyperlapse_merged.mp4"
+        _concat_segments(final_segments, merged_output, reencode=True, fps=fps)
+
+        visual_output = tmp_root / "hyperlapse_visual.mp4"
+        if overlay_path is not None and overlay_path.exists():
+            _apply_hyperlapse_social_overlay(
+                source_video=merged_output,
+                output_video=visual_output,
+                overlay_path=overlay_path,
+                width=width,
+            )
+        else:
+            shutil.copy2(merged_output, visual_output)
+
+        bgm_tracks = _discover_bgm_tracks("hyperlapse")
+        if bgm_tracks:
+            bg_track = bgm_tracks[0]
+            if _has_audio_stream(visual_output):
+                ok, err = _mix_background_music_with_source(
+                    source_video=visual_output,
+                    destination_video=output_path,
+                    bg_track=bg_track,
+                    bg_volume=0.22,
+                    source_volume=1.0,
+                )
+            else:
+                ok, err = _add_background_music(
+                    source_clip=visual_output,
+                    destination_clip=output_path,
+                    bg_track=bg_track,
+                    bg_volume=0.45,
+                    bg_offset_seconds=0.0,
+                )
+
+            if not ok:
+                errors.append(f"BGM mix skipped: {err}")
+                shutil.copy2(visual_output, output_path)
+        else:
+            logger.warning(
+                "hyperlapse_bgm_not_found_skipped",
+                bgm_folder="assets/bgmusic/hyperlapse",
+                input_folder=str(input_folder),
+            )
+            shutil.copy2(visual_output, output_path)
 
         return HyperlapseMergeResult(
             output_path=output_path,
@@ -1397,6 +1489,56 @@ def _add_background_music(
         return True, None
     except subprocess.CalledProcessError as exc:
         # Retry with video re-encode for clips/codecs that cannot stream-copy cleanly.
+        retry_cmd = list(cmd)
+        if "copy" in retry_cmd:
+            copy_idx = retry_cmd.index("copy")
+            retry_cmd[copy_idx] = "libx264"
+            retry_cmd.extend(["-preset", "slow", "-crf", "16"])
+        try:
+            subprocess.run(retry_cmd, check=True, capture_output=True, text=True)
+            return True, None
+        except subprocess.CalledProcessError as retry_exc:
+            return False, (retry_exc.stderr[-300:] if retry_exc.stderr else str(retry_exc))
+
+
+def _mix_background_music_with_source(
+    source_video: Path,
+    destination_video: Path,
+    bg_track: Path,
+    bg_volume: float = 0.22,
+    source_volume: float = 1.0,
+) -> tuple[bool, str | None]:
+    """Mix looping BGM underneath the existing source audio."""
+    bg_gain = max(0.0, min(float(bg_volume), 1.0))
+    src_gain = max(0.0, min(float(source_volume), 2.0))
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i", str(source_video),
+        "-stream_loop", "-1",
+        "-i", str(bg_track),
+        "-filter_complex",
+        (
+            f"[0:a]aformat=sample_fmts=fltp:channel_layouts=stereo,aresample=48000,volume={src_gain:.3f}[src];"
+            f"[1:a]aformat=sample_fmts=fltp:channel_layouts=stereo,aresample=48000,"
+            f"highpass=f=40,lowpass=f=9000,volume={bg_gain:.3f}[bg];"
+            "[src][bg]amix=inputs=2:duration=first:dropout_transition=2,alimiter=limit=0.95[aout]"
+        ),
+        "-map", "0:v",
+        "-map", "[aout]",
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-b:a", "256k",
+        "-shortest",
+        "-movflags", "+faststart",
+        str(destination_video),
+    ]
+
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        return True, None
+    except subprocess.CalledProcessError as exc:
         retry_cmd = list(cmd)
         if "copy" in retry_cmd:
             copy_idx = retry_cmd.index("copy")

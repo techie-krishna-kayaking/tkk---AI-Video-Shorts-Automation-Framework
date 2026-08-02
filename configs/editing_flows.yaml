@@ -85,5 +85,5 @@ editing_flows:
     flow_type: "hyperlapse_merge"
     input_folder: "input/flows/hyperlapse"
     output_folder: "output/flows/hyperlapse/merge"
-    socials_file: ""
+    socials_file: "assets/social/krgd.png"
     enabled: true

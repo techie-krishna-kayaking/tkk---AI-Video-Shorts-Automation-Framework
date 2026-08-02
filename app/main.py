@@ -503,20 +503,73 @@ def run_flow(
         return
 
     if flow_type == "hyperlapse_merge":
-        out_file = output_path / f"{sanitize_filename(input_path.name)}_hyperlapse_merge.mp4"
-        result = create_hyperlapse_merge(
-            input_folder=input_path,
-            output_path=out_file,
-        )
-        if not result.success:
+        photo_extensions = {".jpg", ".jpeg", ".png", ".webp", ".heic"}
+
+        def _folder_has_direct_videos(folder: Path) -> bool:
+            return any(
+                p.is_file() and p.suffix.lower() in short_extensions
+                for p in folder.iterdir()
+            )
+
+        def _folder_has_direct_media(folder: Path) -> bool:
+            valid_exts = set(short_extensions) | photo_extensions
+            return any(
+                p.is_file() and p.suffix.lower() in valid_exts
+                for p in folder.iterdir()
+            )
+
+        candidate_folders: list[Path] = []
+        if _folder_has_direct_videos(input_path):
+            candidate_folders.append(input_path)
+
+        for folder in sorted([p for p in input_path.rglob("*") if p.is_dir()]):
+            if _folder_has_direct_videos(folder):
+                candidate_folders.append(folder)
+
+        # Dedupe while preserving order.
+        seen: set[Path] = set()
+        candidate_folders = [f for f in candidate_folders if not (f in seen or seen.add(f))]
+
+        if not candidate_folders:
+            rich_console.print(f"[yellow]No videos found in {input_path}[/yellow]")
+            raise typer.Exit(0)
+
+        rendered = 0
+        failed = 0
+        for folder in candidate_folders:
+            if not _folder_has_direct_media(folder):
+                continue
+
+            rel = folder.relative_to(input_path)
+            topic_name = sanitize_filename(str(rel).replace("/", "_")) if rel.parts else sanitize_filename(input_path.name)
+            out_file = output_path / f"{topic_name}_hyperlapse_merge.mp4"
+
+            rich_console.print(f"\n[bold]Hyperlapse topic:[/bold] {folder}")
+            result = create_hyperlapse_merge(
+                input_folder=folder,
+                output_path=out_file,
+                overlay_path=overlay_path,
+            )
+            if not result.success:
+                failed += 1
+                rich_console.print(f"  [red]✗[/red] {out_file.name}")
+                for err in result.errors:
+                    rich_console.print(f"    - {err}")
+                continue
+
+            rendered += 1
+            rich_console.print(
+                f"  [green]✓[/green] {out_file.name} "
+                f"(videos: {result.videos_merged}, images: {result.images_merged})"
+            )
+
+        if rendered == 0:
             rich_console.print("[bold red]Hyperlapse merge render failed.[/bold red]")
-            for err in result.errors:
-                rich_console.print(f"  - {err}")
             raise typer.Exit(1)
 
         rich_console.print(
-            f"\n[bold green]Done.[/bold green] {out_file} "
-            f"(videos: {result.videos_merged}, images: {result.images_merged})"
+            f"\n[bold green]Done.[/bold green] Hyperlapse outputs created: {rendered}"
+            + (f" (failed: {failed})" if failed else "")
         )
         return
 
