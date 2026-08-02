@@ -60,6 +60,7 @@ from app.utils.status_reporter import (
     stop_status_reporter as _stop_status_reporter,
 )
 from app.trending_audio_provider import TrendingAudioProvider
+from app.trip_pipeline import create_hyperlapse_merge
 from app.vlog_pipeline import apply_music_only_audio, create_platform_exports, create_vlog_longform, discover_vlog_media
 
 app = typer.Typer(
@@ -499,6 +500,24 @@ def run_flow(
                 rich_console.print(f"  - {err}")
             raise typer.Exit(1)
         rich_console.print(f"\n[bold green]Done.[/bold green] {out_file}")
+        return
+
+    if flow_type == "hyperlapse_merge":
+        out_file = output_path / f"{sanitize_filename(input_path.name)}_hyperlapse_merge.mp4"
+        result = create_hyperlapse_merge(
+            input_folder=input_path,
+            output_path=out_file,
+        )
+        if not result.success:
+            rich_console.print("[bold red]Hyperlapse merge render failed.[/bold red]")
+            for err in result.errors:
+                rich_console.print(f"  - {err}")
+            raise typer.Exit(1)
+
+        rich_console.print(
+            f"\n[bold green]Done.[/bold green] {out_file} "
+            f"(videos: {result.videos_merged}, images: {result.images_merged})"
+        )
         return
 
     rich_console.print(f"[bold red]Unsupported flow type: {flow_type}[/bold red]")

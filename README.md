@@ -143,6 +143,7 @@ python3 -m app.main run-flow --flow cooking_long_form
 python3 -m app.main run-flow --flow cooking_short_form
 python3 -m app.main run-flow --flow tutorial_long_form
 python3 -m app.main run-flow --flow tutorial_short_form --max-clips 6
+python3 -m app.main run-flow --flow hyperlapse_merge
 
 # ── Schedule + upload (unchanged, channel-based uploader pipeline) ──────
 # If you use scheduling/upload commands, keep channels.yaml configured.
@@ -180,6 +181,7 @@ This section documents the current type-based behavior implemented in the codeba
   - Tutorial long-form: `<flow_output>/..._tutorial_longform.mp4`
   - Cooking long-form: `<flow_output>/*_cooking_longform.mp4`
   - Cooking short-form: `<flow_output>/*_cooking_shortform.mp4`
+  - Hyperlapse merge: `<flow_output>/<input_folder_name>_hyperlapse_merge.mp4`
 
 ### 3) Where to place socials branding images
 
@@ -214,6 +216,7 @@ editing_flows:
 | Cooking - Short Form | `run-flow --flow cooking_short_form` | from flow `input_folder` | flow `output_folder` | 1920x1080 @ 30fps | Aggressive trimming (90-120s target), smooth zoom, tuned cooking audio, bottom-center socials |
 | Tutorial - Long Form | `run-flow --flow tutorial_long_form` | from flow `input_folder` | flow `output_folder` | 1080x1920 @ 30fps | Camera-style longform flow with subtitles and top-left socials |
 | Tutorial - Short Form | `run-flow --flow tutorial_short_form` | from flow `input_folder` | flow `output_folder` | 9:16 shorts | Tutorial short rendering with captions/subtitles and bottom-center socials |
+| Hyperlapse - Merge | `run-flow --flow hyperlapse_merge` | from flow `input_folder` | flow `output_folder` | source-standard orientation @ 30fps | Name-ordered video merge, light color pop correction, then images with 1s zoom + swipe transitions, last image 2s, then append `assets/hyperlapse_outro.mp4` |
 
 ### 6) Shorts layout types (vlog/gopro)
 
@@ -231,6 +234,7 @@ Use two different flow entries if you want both styles generated.
 | `input/flows/vlog_gopro/shorts_style2/2026-07-20/GH011251.MP4` | `run-flow --flow vlog_gopro_short_form_editing_style_2` | `output/flows/vlog_gopro/shorts_style2/..._partNNN.mp4` |
 | `input/flows/vlog_gopro/longform/2026-07-20/` | `run-flow --flow vlog_gopro_long_form` | `output/flows/vlog_gopro/longform/2026-07-20_full.mp4` |
 | `input/flows/cooking/shortform/` | `run-flow --flow cooking_short_form` | `output/flows/cooking/shortform/*_cooking_shortform.mp4` |
+| `input/flows/hyperlapse/merge/` | `run-flow --flow hyperlapse_merge` | `output/flows/hyperlapse/merge/<folder>_hyperlapse_merge.mp4` |
 
 ### 8) Config file used now
 

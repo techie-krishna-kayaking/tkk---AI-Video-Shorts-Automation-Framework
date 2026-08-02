@@ -79,3 +79,11 @@ editing_flows:
     output_folder: "output/flows/tutorial/shortform"
     socials_file: "assets/social/tkk_socials.png"
     enabled: true
+
+  hyperlapse_merge:
+    name: "Hyperlapse - Merge"
+    flow_type: "hyperlapse_merge"
+    input_folder: "input/flows/hyperlapse/merge"
+    output_folder: "output/flows/hyperlapse/merge"
+    socials_file: ""
+    enabled: true

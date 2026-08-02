@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import shutil
 import subprocess
 import tempfile
@@ -54,6 +55,15 @@ BG_AUDIO_CHAIN = (
     "afftdn=nf=-22"
 )
 
+
+@dataclass
+class HyperlapseMergeResult:
+    output_path: Path
+    success: bool
+    videos_merged: int
+    images_merged: int
+    errors: list[str]
+
 def _branding_values() -> tuple[float, float, int, int]:
     branding = get_config().branding
     return (
@@ -62,6 +72,428 @@ def _branding_values() -> tuple[float, float, int, int]:
         branding.longform_margin,
         branding.shorts_bottom_margin,
     )
+
+
+def _natural_sort_key(path: Path) -> tuple:
+    parts = re.split(r"(\d+)", path.stem.lower())
+    norm: list[int | str] = []
+    for p in parts:
+        if p.isdigit():
+            norm.append(int(p))
+        elif p:
+            norm.append(p)
+    return tuple(norm + [path.suffix.lower()])
+
+
+def _safe_ffmpeg_path(path: Path) -> str:
+    return str(path.resolve()).replace("'", "'\\''")
+
+
+def _ensure_even(value: int) -> int:
+    return value if value % 2 == 0 else value - 1
+
+
+def _probe_first_image_dimensions(image_path: Path) -> tuple[int, int]:
+    try:
+        with Image.open(image_path) as img:
+            return int(img.width), int(img.height)
+    except Exception:
+        return 0, 0
+
+
+def _pick_hyperlapse_canvas(videos: list[Path], images: list[Path]) -> tuple[int, int]:
+    if videos:
+        w, h = _get_video_dimensions(videos[0])
+        if w > 0 and h > 0:
+            return _ensure_even(w), _ensure_even(h)
+
+    if images:
+        w, h = _probe_first_image_dimensions(images[0])
+        if w > 0 and h > 0:
+            return _ensure_even(w), _ensure_even(h)
+
+    return 1920, 1080
+
+
+def _normalize_hyperlapse_video_segment(
+    source: Path,
+    output_path: Path,
+    width: int,
+    height: int,
+    fps: int,
+) -> None:
+    # Slight contrast/saturation boost to make hyperlapse colors pop naturally.
+    video_filter = (
+        f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,"
+        "eq=contrast=1.08:saturation=1.10:brightness=0.015"
+    )
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(source),
+        "-vf",
+        video_filter,
+        "-r",
+        str(fps),
+        "-c:v",
+        "libx264",
+        "-preset",
+        "slow",
+        "-crf",
+        "16",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "256k",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-movflags",
+        "+faststart",
+        str(output_path),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+
+def _concat_segments(
+    segments: list[Path],
+    output_path: Path,
+    reencode: bool,
+    fps: int,
+) -> None:
+    concat_file = output_path.parent / f"concat_{os.getpid()}_{output_path.stem}.txt"
+    with open(concat_file, "w", encoding="utf-8") as handle:
+        for seg in segments:
+            handle.write(f"file '{_safe_ffmpeg_path(seg)}'\n")
+
+    try:
+        if reencode:
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(concat_file),
+                "-r",
+                str(fps),
+                "-c:v",
+                "libx264",
+                "-preset",
+                "slow",
+                "-crf",
+                "16",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "256k",
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
+                "-movflags",
+                "+faststart",
+                str(output_path),
+            ]
+        else:
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(concat_file),
+                "-c",
+                "copy",
+                "-movflags",
+                "+faststart",
+                str(output_path),
+            ]
+
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    finally:
+        concat_file.unlink(missing_ok=True)
+
+
+def _build_hyperlapse_images_montage(
+    images: list[Path],
+    output_path: Path,
+    width: int,
+    height: int,
+    fps: int,
+) -> None:
+    if not images:
+        raise ValueError("No images provided for montage")
+
+    transition = 0.35
+    durations = [1.0 for _ in images]
+    durations[-1] = 2.0
+
+    cmd = ["ffmpeg", "-y"]
+    for idx, image_path in enumerate(images):
+        clip_duration = durations[idx]
+        input_duration = clip_duration + (transition if idx < len(images) - 1 else 0.0)
+        cmd.extend([
+            "-loop",
+            "1",
+            "-t",
+            f"{input_duration:.3f}",
+            "-i",
+            str(image_path),
+        ])
+
+    filter_parts: list[str] = []
+    for idx, _image_path in enumerate(images):
+        clip_duration = durations[idx]
+        input_duration = clip_duration + (transition if idx < len(images) - 1 else 0.0)
+        frame_count = max(1, int(round(input_duration * fps)))
+        filter_parts.append(
+            f"[{idx}:v]"
+            f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},"
+            "zoompan="
+            f"z='min(zoom+0.0015,1.10)':"
+            "x='iw/2-(iw/zoom/2)':"
+            "y='ih/2-(ih/zoom/2)':"
+            f"d={frame_count}:s={width}x{height}:fps={fps},"
+            f"trim=duration={input_duration:.3f},"
+            "setpts=PTS-STARTPTS,format=yuv420p"
+            f"[v{idx}]"
+        )
+
+    cumulative = durations[0]
+    filter_parts.append(f"[v0]setpts=PTS-STARTPTS[vx0]")
+    previous_label = "[vx0]"
+
+    for idx in range(1, len(images)):
+        offset = max(0.0, cumulative - transition)
+        out_label = f"[vx{idx}]"
+        filter_parts.append(
+            f"{previous_label}[v{idx}]"
+            f"xfade=transition=slideleft:duration={transition:.3f}:offset={offset:.3f}"
+            f"{out_label}"
+        )
+        previous_label = out_label
+        cumulative += durations[idx]
+
+    filter_parts.append(
+        f"anullsrc=channel_layout=stereo:sample_rate=48000,"
+        f"atrim=duration={cumulative:.3f},asetpts=PTS-STARTPTS[aout]"
+    )
+
+    cmd.extend([
+        "-filter_complex",
+        ";".join(filter_parts),
+        "-map",
+        previous_label,
+        "-map",
+        "[aout]",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "medium",
+        "-crf",
+        "18",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-movflags",
+        "+faststart",
+        str(output_path),
+    ])
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+
+def _normalize_outro_segment(
+    outro_path: Path,
+    output_path: Path,
+    width: int,
+    height: int,
+    fps: int,
+) -> None:
+    filter_video = (
+        f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1"
+    )
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(outro_path),
+        "-vf",
+        filter_video,
+        "-r",
+        str(fps),
+        "-c:v",
+        "libx264",
+        "-preset",
+        "slow",
+        "-crf",
+        "16",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "256k",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-movflags",
+        "+faststart",
+        str(output_path),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+
+def create_hyperlapse_merge(
+    input_folder: Path,
+    output_path: Path,
+    outro_path: Path | None = None,
+) -> HyperlapseMergeResult:
+    """Create one hyperlapse merge video from ordered videos + images and append outro."""
+    errors: list[str] = []
+
+    if not input_folder.exists() or not input_folder.is_dir():
+        return HyperlapseMergeResult(
+            output_path=output_path,
+            success=False,
+            videos_merged=0,
+            images_merged=0,
+            errors=[f"Input folder not found: {input_folder}"],
+        )
+
+    all_files = [p for p in sorted(input_folder.iterdir()) if p.is_file()]
+    videos = [p for p in all_files if p.suffix.lower() in VIDEO_EXTENSIONS]
+    images = [p for p in all_files if p.suffix.lower() in PHOTO_EXTENSIONS]
+
+    videos = sorted(videos, key=_natural_sort_key)
+    images = sorted(images, key=_natural_sort_key)
+
+    if not videos:
+        return HyperlapseMergeResult(
+            output_path=output_path,
+            success=False,
+            videos_merged=0,
+            images_merged=len(images),
+            errors=["No video files found for HYPERLAPSE_MERGE"],
+        )
+
+    if outro_path is None:
+        outro_path = Path("assets") / "hyperlapse_outro.mp4"
+
+    if not outro_path.exists():
+        return HyperlapseMergeResult(
+            output_path=output_path,
+            success=False,
+            videos_merged=len(videos),
+            images_merged=len(images),
+            errors=[f"Outro file not found: {outro_path}"],
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fps = int(get_config().video.fps or 30)
+    width, height = _pick_hyperlapse_canvas(videos=videos, images=images)
+
+    tmp_root = Path(tempfile.gettempdir()) / f"hyperlapse_merge_{os.getpid()}_{sanitize_filename(input_folder.name)}"
+    tmp_root.mkdir(parents=True, exist_ok=True)
+
+    try:
+        normalized_videos: list[Path] = []
+        for idx, video in enumerate(videos, 1):
+            out = tmp_root / f"video_norm_{idx:04d}.mp4"
+            try:
+                _normalize_hyperlapse_video_segment(
+                    source=video,
+                    output_path=out,
+                    width=width,
+                    height=height,
+                    fps=fps,
+                )
+                normalized_videos.append(out)
+            except subprocess.CalledProcessError as exc:
+                msg = exc.stderr[-300:] if exc.stderr else str(exc)
+                errors.append(f"{video.name}: {msg}")
+
+        if not normalized_videos:
+            return HyperlapseMergeResult(
+                output_path=output_path,
+                success=False,
+                videos_merged=0,
+                images_merged=len(images),
+                errors=errors or ["Failed to normalize input videos"],
+            )
+
+        merged_videos_path = tmp_root / "videos_merged.mp4"
+        try:
+            _concat_segments(normalized_videos, merged_videos_path, reencode=False, fps=fps)
+        except subprocess.CalledProcessError:
+            _concat_segments(normalized_videos, merged_videos_path, reencode=True, fps=fps)
+
+        final_segments: list[Path] = [merged_videos_path]
+
+        if images:
+            montage_path = tmp_root / "images_montage.mp4"
+            _build_hyperlapse_images_montage(
+                images=images,
+                output_path=montage_path,
+                width=width,
+                height=height,
+                fps=fps,
+            )
+            final_segments.append(montage_path)
+
+        normalized_outro = tmp_root / "outro_norm.mp4"
+        _normalize_outro_segment(
+            outro_path=outro_path,
+            output_path=normalized_outro,
+            width=width,
+            height=height,
+            fps=fps,
+        )
+        final_segments.append(normalized_outro)
+
+        _concat_segments(final_segments, output_path, reencode=True, fps=fps)
+
+        return HyperlapseMergeResult(
+            output_path=output_path,
+            success=True,
+            videos_merged=len(normalized_videos),
+            images_merged=len(images),
+            errors=errors,
+        )
+    except subprocess.CalledProcessError as exc:
+        msg = exc.stderr[-500:] if exc.stderr else str(exc)
+        errors.append(msg)
+        return HyperlapseMergeResult(
+            output_path=output_path,
+            success=False,
+            videos_merged=len(videos),
+            images_merged=len(images),
+            errors=errors,
+        )
+    finally:
+        shutil.rmtree(tmp_root, ignore_errors=True)
 
 
 @dataclass
