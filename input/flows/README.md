@@ -25,7 +25,7 @@ Place your source videos/files in these folders based on editing style:
   - input/flows/tutorial/shortform
 
 - Hyperlapse Merge:
-  - input/flows/hyperlapse/merge
+  - input/flows/hyperlapse
   - Put both videos and images here.
   - Keep names in ascending order (for example: 1.mp4, 2.mp4, 3.mp4 and 1.jpg, 2.jpg, 3.jpg).
 

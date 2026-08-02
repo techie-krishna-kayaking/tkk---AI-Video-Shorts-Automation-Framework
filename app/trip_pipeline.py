@@ -402,7 +402,8 @@ def create_hyperlapse_merge(
             errors=[f"Input folder not found: {input_folder}"],
         )
 
-    all_files = [p for p in sorted(input_folder.iterdir()) if p.is_file()]
+    # Accept both direct files and nested layouts (for example: input/flows/hyperlapse/merge).
+    all_files = [p for p in sorted(input_folder.rglob("*")) if p.is_file()]
     videos = [p for p in all_files if p.suffix.lower() in VIDEO_EXTENSIONS]
     images = [p for p in all_files if p.suffix.lower() in PHOTO_EXTENSIONS]
 

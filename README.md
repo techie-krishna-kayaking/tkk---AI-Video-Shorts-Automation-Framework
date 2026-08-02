@@ -234,7 +234,7 @@ Use two different flow entries if you want both styles generated.
 | `input/flows/vlog_gopro/shorts_style2/2026-07-20/GH011251.MP4` | `run-flow --flow vlog_gopro_short_form_editing_style_2` | `output/flows/vlog_gopro/shorts_style2/..._partNNN.mp4` |
 | `input/flows/vlog_gopro/longform/2026-07-20/` | `run-flow --flow vlog_gopro_long_form` | `output/flows/vlog_gopro/longform/2026-07-20_full.mp4` |
 | `input/flows/cooking/shortform/` | `run-flow --flow cooking_short_form` | `output/flows/cooking/shortform/*_cooking_shortform.mp4` |
-| `input/flows/hyperlapse/merge/` | `run-flow --flow hyperlapse_merge` | `output/flows/hyperlapse/merge/<folder>_hyperlapse_merge.mp4` |
+| `input/flows/hyperlapse/` | `run-flow --flow hyperlapse_merge` | `output/flows/hyperlapse/merge/<folder>_hyperlapse_merge.mp4` |
 
 ### 8) Config file used now
 

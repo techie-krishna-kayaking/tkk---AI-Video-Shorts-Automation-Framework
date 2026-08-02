@@ -83,7 +83,7 @@ editing_flows:
   hyperlapse_merge:
     name: "Hyperlapse - Merge"
     flow_type: "hyperlapse_merge"
-    input_folder: "input/flows/hyperlapse/merge"
+    input_folder: "input/flows/hyperlapse"
     output_folder: "output/flows/hyperlapse/merge"
     socials_file: ""
     enabled: true
