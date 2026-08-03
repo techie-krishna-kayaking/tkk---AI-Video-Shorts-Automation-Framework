@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import random
 import re
@@ -269,31 +270,34 @@ def _build_hyperlapse_images_montage(
     for idx, _image_path in enumerate(images):
         clip_duration = durations[idx]
         input_duration = clip_duration + (transition if idx < len(images) - 1 else 0.0)
-        zoom_peak = 0.06
+        regular_zoom_peak = 0.05
+        last_image_peak_zoom = 1.5
         zoom_expr = (
-            f"(1+{zoom_peak:.4f}*(1-cos(2*PI*min(t/{input_duration:.4f},1)))/2)"
+            # Smooth center zoom motion for all pictures.
+            f"(1+{regular_zoom_peak:.4f}*pow(sin(PI*min(t/{input_duration:.4f},1)),2))"
         )
         if idx == len(images) - 1:
             # Last image: 1s smooth center zoom-in, 1s hold, 1s smooth center zoom-out.
             zoom_expr = (
                 f"if(lt(t,1),"
-                f"1+{zoom_peak:.4f}*(1-cos(PI*t))/2,"
+                f"1+({last_image_peak_zoom:.4f}-1)*(1-cos(PI*t))/2,"
                 f"if(lt(t,2),"
-                f"1+{zoom_peak:.4f},"
+                f"{last_image_peak_zoom:.4f},"
                 f"if(lt(t,3),"
-                f"1+{zoom_peak:.4f}*(1+cos(PI*(t-2)))/2,"
+                f"1+({last_image_peak_zoom:.4f}-1)*(1+cos(PI*(t-2)))/2,"
                 f"1)))"
             )
         filter_parts.append(
+            # Build each still clip on a white canvas, then zoom the foreground image
+            # around its own center and keep it centered in frame.
             f"[{idx}:v]"
-            # Keep non-matching aspect images centered with white padding.
             f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
-            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:white,"
-            # Smooth center zoom-in then zoom-out using one cosine-eased cycle.
-            f"scale='trunc(iw*{zoom_expr}/2)*2':'trunc(ih*{zoom_expr}/2)*2':eval=frame,"
-            f"crop={width}:{height}:(iw-{width})/2:(ih-{height})/2,"
-            f"fps={fps},"
-            f"trim=duration={input_duration:.3f},"
+            "setsar=1,format=rgba,"
+            f"scale='trunc(iw*{zoom_expr}/2)*2':'trunc(ih*{zoom_expr}/2)*2':eval=frame"
+            f"[fg{idx}];"
+            f"color=c=white:s={width}x{height}:r={fps}:d={input_duration:.3f}[bg{idx}];"
+            f"[bg{idx}][fg{idx}]overlay=(W-w)/2:(H-h)/2:eval=frame,"
+            f"fps={fps},trim=duration={input_duration:.3f},"
             "setpts=PTS-STARTPTS,format=yuv420p"
             f"[v{idx}]"
         )
@@ -433,11 +437,127 @@ def _apply_hyperlapse_social_overlay(
     subprocess.run(cmd, check=True, capture_output=True, text=True)
 
 
+def _apply_hyperlapse_video_caption(
+    source_video: Path,
+    output_video: Path,
+    caption_text: str,
+    width: int,
+) -> None:
+    # Caption appears only on the hyperlapse video part (not on photo montage/outro).
+    font_size = max(42, int(width * 0.041))
+    top_margin = 115
+    line_spacing = max(10, int(font_size * 0.22))
+    stroke_width = max(2, int(font_size * 0.06))
+    padding = max(10, int(font_size * 0.18))
+
+    # Prefer Nexa Rust Sans from project assets, then system font fallbacks.
+    nexa_candidates = [
+        Path("assets/fonts/NexaRustSans-Black.ttf"),
+        Path("assets/fonts/NexaRustSans-Black.otf"),
+        Path("assets/fonts/Nexa Rust Sans Black.ttf"),
+        Path("assets/fonts/Nexa Rust Sans Black.otf"),
+    ]
+    system_fallbacks = [
+        Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
+        Path("/Library/Fonts/Arial.ttf"),
+    ]
+
+    words = caption_text.split()
+    if len(words) >= 6 and " at " in f" {caption_text} ":
+        split_at = caption_text.rfind(" at ")
+        line1 = caption_text[:split_at].strip()
+        line2 = caption_text[split_at + 1 :].strip()
+    else:
+        split_index = max(1, len(words) // 2)
+        line1 = " ".join(words[:split_index]).strip()
+        line2 = " ".join(words[split_index:]).strip()
+    caption_two_lines = f"{line1}\n{line2}" if line2 else line1
+
+    font = None
+    for candidate in nexa_candidates + system_fallbacks:
+        if candidate.exists():
+            try:
+                font = ImageFont.truetype(str(candidate), font_size)
+                break
+            except Exception:
+                font = None
+    if font is None:
+        try:
+            font = ImageFont.truetype("Arial", font_size)
+        except Exception:
+            font = ImageFont.load_default()
+
+    probe_img = Image.new("RGBA", (10, 10), (0, 0, 0, 0))
+    probe_draw = ImageDraw.Draw(probe_img)
+    bb = probe_draw.multiline_textbbox(
+        (0, 0),
+        caption_two_lines,
+        font=font,
+        align="center",
+        spacing=line_spacing,
+        stroke_width=stroke_width,
+    )
+    text_w = max(1, int(math.ceil(bb[2] - bb[0])))
+    text_h = max(1, int(math.ceil(bb[3] - bb[1])))
+
+    card_w = int(text_w + (padding * 2))
+    card_h = int(text_h + (padding * 2))
+    card = Image.new("RGBA", (card_w, card_h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(card)
+    draw.multiline_text(
+        (card_w / 2, padding - bb[1]),
+        caption_two_lines,
+        fill=(255, 255, 255, 255),
+        font=font,
+        align="center",
+        anchor="ma",
+        spacing=line_spacing,
+        stroke_width=stroke_width,
+        stroke_fill=(0, 0, 0, 210),
+    )
+
+    overlay_image = output_video.with_suffix(".caption.png")
+    card.save(overlay_image)
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(source_video),
+        "-i",
+        str(overlay_image),
+        "-filter_complex",
+        f"[0:v][1:v]overlay=(W-w)/2:{top_margin}:format=auto[vout]",
+        "-map",
+        "[vout]",
+        "-map",
+        "0:a?",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "slow",
+        "-crf",
+        "16",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "copy",
+        "-movflags",
+        "+faststart",
+        str(output_video),
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    finally:
+        overlay_image.unlink(missing_ok=True)
+
+
 def create_hyperlapse_merge(
     input_folder: Path,
     output_path: Path,
     overlay_path: Path | None = None,
     outro_path: Path | None = None,
+    bgm_subdir: str | None = "hyperlapse",
 ) -> HyperlapseMergeResult:
     """Create one hyperlapse merge video from ordered videos + images and append outro."""
     errors: list[str] = []
@@ -518,7 +638,15 @@ def create_hyperlapse_merge(
         except subprocess.CalledProcessError:
             _concat_segments(normalized_videos, merged_videos_path, reencode=True, fps=fps)
 
-        final_segments: list[Path] = [merged_videos_path]
+        captioned_video_part = tmp_root / "videos_merged_captioned.mp4"
+        _apply_hyperlapse_video_caption(
+            source_video=merged_videos_path,
+            output_video=captioned_video_part,
+            caption_text="Blessed to serve the Lordships at ISKCON NRJD",
+            width=width,
+        )
+
+        final_segments: list[Path] = [captioned_video_part]
 
         if images:
             montage_path = tmp_root / "images_montage.mp4"
@@ -556,7 +684,7 @@ def create_hyperlapse_merge(
         else:
             shutil.copy2(merged_output, visual_output)
 
-        bgm_tracks = _discover_bgm_tracks("hyperlapse")
+        bgm_tracks = _discover_bgm_tracks(bgm_subdir) if bgm_subdir else []
         if bgm_tracks:
             bg_track = bgm_tracks[0]
             if _has_audio_stream(visual_output):
@@ -580,11 +708,12 @@ def create_hyperlapse_merge(
                 errors.append(f"BGM mix skipped: {err}")
                 shutil.copy2(visual_output, output_path)
         else:
-            logger.warning(
-                "hyperlapse_bgm_not_found_skipped",
-                bgm_folder="assets/bgmusic/hyperlapse",
-                input_folder=str(input_folder),
-            )
+            if bgm_subdir:
+                logger.warning(
+                    "hyperlapse_bgm_not_found_skipped",
+                    bgm_folder=f"assets/bgmusic/{bgm_subdir}",
+                    input_folder=str(input_folder),
+                )
             shutil.copy2(visual_output, output_path)
 
         return HyperlapseMergeResult(
@@ -606,6 +735,44 @@ def create_hyperlapse_merge(
         )
     finally:
         shutil.rmtree(tmp_root, ignore_errors=True)
+
+
+def create_hyperlapse_audio_variant(
+    source_video: Path,
+    output_video: Path,
+    bgm_subdir: str,
+    track_index_hint: int | None = None,
+    bg_volume_with_source: float = 0.22,
+    bg_volume_no_source: float = 0.45,
+) -> tuple[bool, str | None]:
+    """Create one platform-specific hyperlapse output with BGM from a subfolder."""
+    tracks = _discover_bgm_tracks(bgm_subdir)
+    if not tracks:
+        shutil.copy2(source_video, output_video)
+        return False, f"No BGM tracks found in assets/bgmusic/{bgm_subdir}"
+
+    if track_index_hint is None:
+        track_index = abs(hash(source_video.stem)) % len(tracks)
+    else:
+        track_index = int(track_index_hint) % len(tracks)
+    bg_track = tracks[track_index]
+    if _has_audio_stream(source_video):
+        ok, err = _mix_background_music_with_source(
+            source_video=source_video,
+            destination_video=output_video,
+            bg_track=bg_track,
+            bg_volume=bg_volume_with_source,
+            source_volume=1.0,
+        )
+    else:
+        ok, err = _add_background_music(
+            source_clip=source_video,
+            destination_clip=output_video,
+            bg_track=bg_track,
+            bg_volume=bg_volume_no_source,
+            bg_offset_seconds=0.0,
+        )
+    return ok, err
 
 
 @dataclass

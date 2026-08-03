@@ -60,7 +60,7 @@ from app.utils.status_reporter import (
     stop_status_reporter as _stop_status_reporter,
 )
 from app.trending_audio_provider import TrendingAudioProvider
-from app.trip_pipeline import create_hyperlapse_merge
+from app.trip_pipeline import create_hyperlapse_audio_variant, create_hyperlapse_merge
 from app.vlog_pipeline import apply_music_only_audio, create_platform_exports, create_vlog_longform, discover_vlog_media
 
 app = typer.Typer(
@@ -534,32 +534,63 @@ def run_flow(
             rich_console.print(f"[yellow]No videos found in {input_path}[/yellow]")
             raise typer.Exit(0)
 
+        yt_dir = output_path / "yt"
+        insta_dir = output_path / "insta"
+        yt_dir.mkdir(parents=True, exist_ok=True)
+        insta_dir.mkdir(parents=True, exist_ok=True)
+
         rendered = 0
         failed = 0
-        for folder in candidate_folders:
+        for topic_index, folder in enumerate(candidate_folders):
             if not _folder_has_direct_media(folder):
                 continue
 
             rel = folder.relative_to(input_path)
             topic_name = sanitize_filename(str(rel).replace("/", "_")) if rel.parts else sanitize_filename(input_path.name)
-            out_file = output_path / f"{topic_name}_hyperlapse_merge.mp4"
+            base_file = output_path / f"_tmp_{topic_name}_hyperlapse_merge.mp4"
+            out_yt = yt_dir / f"{topic_name}_hyperlapse_merge_yt.mp4"
+            out_insta = insta_dir / f"{topic_name}_hyperlapse_merge_insta.mp4"
 
             rich_console.print(f"\n[bold]Hyperlapse topic:[/bold] {folder}")
             result = create_hyperlapse_merge(
                 input_folder=folder,
-                output_path=out_file,
+                output_path=base_file,
                 overlay_path=overlay_path,
+                bgm_subdir=None,
             )
             if not result.success:
                 failed += 1
-                rich_console.print(f"  [red]✗[/red] {out_file.name}")
+                rich_console.print(f"  [red]✗[/red] {topic_name}")
                 for err in result.errors:
                     rich_console.print(f"    - {err}")
                 continue
 
+            yt_ok, yt_err = create_hyperlapse_audio_variant(
+                source_video=base_file,
+                output_video=out_yt,
+                bgm_subdir="yt",
+                track_index_hint=topic_index,
+                bg_volume_with_source=0.18,
+                bg_volume_no_source=0.40,
+            )
+            insta_ok, insta_err = create_hyperlapse_audio_variant(
+                source_video=base_file,
+                output_video=out_insta,
+                bgm_subdir="hyperlapse",
+                track_index_hint=topic_index,
+                bg_volume_with_source=0.24,
+                bg_volume_no_source=0.50,
+            )
+            base_file.unlink(missing_ok=True)
+
+            if not yt_ok:
+                rich_console.print(f"    [yellow]YT BGM warning:[/yellow] {yt_err}")
+            if not insta_ok:
+                rich_console.print(f"    [yellow]Insta BGM warning:[/yellow] {insta_err}")
+
             rendered += 1
             rich_console.print(
-                f"  [green]✓[/green] {out_file.name} "
+                f"  [green]✓[/green] {out_yt.name}, {out_insta.name} "
                 f"(videos: {result.videos_merged}, images: {result.images_merged})"
             )
 
