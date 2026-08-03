@@ -444,10 +444,10 @@ def _apply_hyperlapse_video_caption(
     width: int,
 ) -> None:
     # Caption appears only on the hyperlapse video part (not on photo montage/outro).
-    font_size = max(42, int(width * 0.041))
-    top_margin = 115
-    line_spacing = max(10, int(font_size * 0.22))
-    stroke_width = max(2, int(font_size * 0.06))
+    font_size = max(52, int(width * 0.052))
+    top_margin = 105
+    line_spacing = max(12, int(font_size * 0.24))
+    stroke_width = max(2, int(font_size * 0.07))
     padding = max(10, int(font_size * 0.18))
 
     # Prefer Nexa Rust Sans from project assets, then system font fallbacks.
@@ -458,6 +458,8 @@ def _apply_hyperlapse_video_caption(
         Path("assets/fonts/Nexa Rust Sans Black.otf"),
     ]
     system_fallbacks = [
+        Path("/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
+        Path("/Library/Fonts/Arial Bold.ttf"),
         Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
         Path("/Library/Fonts/Arial.ttf"),
     ]
@@ -483,9 +485,12 @@ def _apply_hyperlapse_video_caption(
                 font = None
     if font is None:
         try:
-            font = ImageFont.truetype("Arial", font_size)
+            font = ImageFont.truetype("Arial Bold", font_size)
         except Exception:
-            font = ImageFont.load_default()
+            try:
+                font = ImageFont.truetype("Arial", font_size)
+            except Exception:
+                font = ImageFont.load_default()
 
     probe_img = Image.new("RGBA", (10, 10), (0, 0, 0, 0))
     probe_draw = ImageDraw.Draw(probe_img)
