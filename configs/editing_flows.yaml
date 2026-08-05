@@ -25,16 +25,16 @@ editing_flows:
   vlog_gopro_long_form:
     name: "Vlog GoPro - Long Form"
     flow_type: "vlog_gopro_long_form"
-    input_folder: "input/flows/vlog_gopro/longform"
-    output_folder: "output/flows/vlog_gopro/longform"
+    input_folder: "input/flows/vlog_gopro/2026-07-13-DAILY OFFICE VLOG-Home_Office_INFOBLOX_Rajajinagar_GoldenHeights_OfficeVlog_MotoVlog"
+    output_folder: "output/vlog_gopro"
     socials_file: "assets/social/krgd_vlogs.png"
     enabled: true
 
   vlog_gopro_short_form_editing_style_1:
     name: "Vlog GoPro - Short Form Editing Style 1"
     flow_type: "vlog_gopro_short_form_editing_style_1"
-    input_folder: "input/flows/vlog_gopro/shorts_style1"
-    output_folder: "output/flows/vlog_gopro/shorts_style1"
+    input_folder: "input/flows/vlog_gopro/2026-07-13-DAILY OFFICE VLOG-Home_Office_INFOBLOX_Rajajinagar_GoldenHeights_OfficeVlog_MotoVlog"
+    output_folder: "output/vlog_gopro/short"
     socials_file: "assets/social/krgd_vlogs.png"
     vlog_shorts_editing: "editing1"
     enabled: true
@@ -42,10 +42,28 @@ editing_flows:
   vlog_gopro_short_form_editing_style_2:
     name: "Vlog GoPro - Short Form Editing Style 2"
     flow_type: "vlog_gopro_short_form_editing_style_2"
-    input_folder: "input/flows/vlog_gopro/shorts_style2"
-    output_folder: "output/flows/vlog_gopro/shorts_style2"
+    input_folder: "input/flows/vlog_gopro/2026-07-13-DAILY OFFICE VLOG-Home_Office_INFOBLOX_Rajajinagar_GoldenHeights_OfficeVlog_MotoVlog"
+    output_folder: "output/vlog_gopro/short"
     socials_file: "assets/social/krgd_vlogs.png"
     vlog_shorts_editing: "editing2"
+    enabled: true
+
+  vlog_gopro_music_only:
+    name: "Vlog GoPro - Music Only (Longform + Shorts Style 1/2)"
+    flow_type: "vlog_gopro_music_only"
+    input_folder: "input/flows/vlog_gopro/2026-07-13-DAILY OFFICE VLOG-Home_Office_INFOBLOX_Rajajinagar_GoldenHeights_OfficeVlog_MotoVlog"
+    output_folder: "output/vlog_gopro"
+    socials_file: "assets/social/krgd_vlogs.png"
+    vlog_shorts_editing: "both"
+    enabled: true
+
+  vlog_gopro_music_only_shorts:
+    name: "Vlog GoPro - Music Only Shorts (Style 1 + Style 2)"
+    flow_type: "vlog_gopro_music_only_shorts"
+    input_folder: "input/flows/vlog_gopro/2026-07-13-DAILY OFFICE VLOG-Home_Office_INFOBLOX_Rajajinagar_GoldenHeights_OfficeVlog_MotoVlog"
+    output_folder: "output/vlog_gopro/short"
+    socials_file: "assets/social/krgd_vlogs.png"
+    vlog_shorts_editing: "both"
     enabled: true
 
   cooking_long_form:

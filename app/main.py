@@ -188,7 +188,13 @@ def _classify_vlog_outcome(
     """Classify a vlog folder by output integrity and completeness."""
     output_dir = Path(output_folder)
     prefix = sanitize_filename(folder.name)
-    longform_path = output_dir / "longform" / f"{prefix}_vlog_longform.mp4"
+    # New default: longform sits directly under output root with LONG_FORM suffix.
+    longform_path = output_dir / f"{prefix}_LONG_FORM.mp4"
+    # Backward compatibility for older output structure.
+    if not longform_path.exists():
+        legacy = output_dir / "longform" / f"{prefix}_vlog_longform.mp4"
+        if legacy.exists():
+            longform_path = legacy
 
     input_videos = _count_source_videos(folder, extensions)
     shorts = _count_raw_shorts(output_dir, prefix)
@@ -381,6 +387,65 @@ def run_flow(
         "vlog_gopro_short_form_editing_style_2",
     }
 
+    if flow_type == "vlog_gopro_music_only":
+        with _temporary_flow_channel(
+            flow_key=flow,
+            flow_cfg=flow_cfg,
+            channel_type="vlog",
+            vlog_shorts_editing=(flow_cfg.vlog_shorts_editing or "both"),
+        ) as (temp_channel_id, _):
+            _run_vlog_workflow(
+                vlog_folder=input_path,
+                channel=temp_channel_id,
+                max_clips=max_clips,
+                fast=fast,
+                no_upload=True,
+                music_only=True,
+            )
+
+        rich_console.print("\n[bold green]Done.[/bold green] Music-only vlog flow completed.")
+        return
+
+    if flow_type == "vlog_gopro_music_only_shorts":
+        videos = _discover_flow_videos(flow_cfg.input_folder, extensions=short_extensions)
+        if not videos:
+            rich_console.print(f"[yellow]No videos found in {input_path}[/yellow]")
+            raise typer.Exit(0)
+
+        with _temporary_flow_channel(
+            flow_key=flow,
+            flow_cfg=flow_cfg,
+            channel_type="gopro",
+            vlog_shorts_editing=(flow_cfg.vlog_shorts_editing or "both"),
+        ) as (temp_channel_id, _):
+            short_clips: list[Path] = []
+            for idx, video in enumerate(videos, 1):
+                rich_console.print(f"\n[bold]({idx}/{len(videos)})[/bold] {video.name}")
+                out_files = process(
+                    video_path=video,
+                    channel=temp_channel_id,
+                    max_clips=max_clips,
+                    fast=fast,
+                    no_captions=False,
+                    no_upload=True,
+                )
+                short_clips.extend(out_files)
+
+            if not short_clips:
+                rich_console.print("[yellow]No shorts generated from source videos.[/yellow]")
+                raise typer.Exit(0)
+
+            exports = create_platform_exports(
+                short_clips=short_clips,
+                output_dir=output_path,
+                music_only=True,
+            )
+
+        rich_console.print("\n[bold green]Done.[/bold green] Music-only shorts flow completed.")
+        rich_console.print(f"  YouTube exports:   {len(exports.youtube_exports)}")
+        rich_console.print(f"  Instagram exports: {len(exports.instagram_exports)}")
+        return
+
     if flow_type in shortform_types:
         videos = _discover_flow_videos(flow_cfg.input_folder, extensions=short_extensions)
         if not videos:
@@ -389,6 +454,11 @@ def run_flow(
 
         channel_type = "gopro" if "vlog_gopro" in flow_type else "tutorial"
         gopro_mode = "editing2" if flow_type.endswith("style_2") else "editing1"
+        short_name_suffix = ""
+        if flow_type == "vlog_gopro_short_form_editing_style_1":
+            short_name_suffix = "_style1"
+        elif flow_type == "vlog_gopro_short_form_editing_style_2":
+            short_name_suffix = "_style2"
 
         with _temporary_flow_channel(
             flow_key=flow,
@@ -399,6 +469,9 @@ def run_flow(
             rendered_count = 0
             for idx, video in enumerate(videos, 1):
                 rich_console.print(f"\n[bold]({idx}/{len(videos)})[/bold] {video.name}")
+                output_name_override = None
+                if short_name_suffix and channel_type == "gopro":
+                    output_name_override = f"{sanitize_filename(video.stem)}{short_name_suffix}"
                 out_files = process(
                     video_path=video,
                     channel=temp_channel_id,
@@ -406,6 +479,7 @@ def run_flow(
                     fast=fast,
                     no_captions=False,
                     no_upload=True,
+                    output_name_override=output_name_override,
                 )
                 rendered_count += len(out_files)
 
@@ -423,7 +497,7 @@ def run_flow(
 
         success = 0
         for folder_name, videos in subfolders.items():
-            out_file = output_path / f"{folder_name}_full.mp4"
+            out_file = output_path / f"{folder_name}_LONG_FORM.mp4"
             result = generate_longform(videos=videos, output_path=out_file, overlay_path=overlay_path)
             if result.success:
                 success += 1
@@ -818,9 +892,13 @@ def process(
         render_variants: list[tuple[str, str]] = [(video_name, gopro_layout)]
         if channel_type == "gopro" and gopro_editing_mode == "both":
             render_variants = [
-                (f"{video_name}_editing1", "classic"),
-                (f"{video_name}_editing2", "orange_70_15_15"),
+                (f"{video_name}_style1", "classic"),
+                (f"{video_name}_style2", "orange_70_15_15"),
             ]
+        elif channel_type == "gopro" and gopro_editing_mode == "editing1" and not video_name.endswith("_style1"):
+            render_variants = [(f"{video_name}_style1", "classic")]
+        elif channel_type == "gopro" and gopro_editing_mode == "editing2" and not video_name.endswith("_style2"):
+            render_variants = [(f"{video_name}_style2", "orange_70_15_15")]
 
         task = progress.add_task("Rendering clips...", total=len(selection.clips) * len(render_variants))
         results = []
@@ -934,11 +1012,9 @@ def _run_vlog_workflow(
         raise typer.Exit(1)
 
     output_dir = get_channel_output_dir(ch_config.output_folder)
-    longform_dir = output_dir / "longform"
-    longform_dir.mkdir(parents=True, exist_ok=True)
-
-    longform_name = f"{sanitize_filename(vlog_folder.name)}_vlog_longform.mp4"
-    longform_path = longform_dir / longform_name
+    output_dir.mkdir(parents=True, exist_ok=True)
+    longform_name = f"{sanitize_filename(vlog_folder.name)}_LONG_FORM.mp4"
+    longform_path = output_dir / longform_name
 
     longform_overlay_path: Path | None = None
     socials = ch_config.socials_file or ch_config.social_footer

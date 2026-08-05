@@ -377,7 +377,7 @@ def generate_longform(
         f"crop={target_width}:{target_height},setsar=1,fps={target_fps}[base]"
     )
     filter_parts.append(
-        f"[base]scale='trunc({target_width}*{smooth_zoom}/2)*2':'trunc({target_height}*{smooth_zoom}/2)*2',"
+        f"[base]scale='trunc({target_width}*{smooth_zoom}/2)*2':'trunc({target_height}*{smooth_zoom}/2)*2':eval=frame,"
         f"crop={target_width}:{target_height}:(iw-ow)/2:(ih-oh)/2[vzoom]"
     )
 
@@ -584,7 +584,7 @@ def generate_camera_recording_longform(
 
     fc.append(f"{video_in}scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30[base]")
     fc.append(
-        f"[base]scale='trunc(1080*{zoom_expr}/2)*2':'trunc(1920*{zoom_expr}/2)*2',"
+        f"[base]scale='trunc(1080*{zoom_expr}/2)*2':'trunc(1920*{zoom_expr}/2)*2':eval=frame,"
         f"crop=1080:1920:(iw-ow)/2:(ih-oh)/2[vzoom]"
     )
 
@@ -796,7 +796,7 @@ def generate_cooking_recording_longform(
 
     fc.append(f"{video_in}scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30[base]")
     fc.append(
-        f"[base]scale='trunc(1080*{zoom_expr}/2)*2':'trunc(1920*{zoom_expr}/2)*2',"
+        f"[base]scale='trunc(1080*{zoom_expr}/2)*2':'trunc(1920*{zoom_expr}/2)*2':eval=frame,"
         f"crop=1080:1920:(iw-ow)/2:(ih-oh)/2[vmain]"
     )
 
@@ -996,7 +996,7 @@ def generate_cooking_shortform(
 
     fc.append(f"{video_in}scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1,fps=30[base]")
     fc.append(
-        f"[base]scale='trunc(1920*{zoom_expr}/2)*2':'trunc(1080*{zoom_expr}/2)*2',"
+        f"[base]scale='trunc(1920*{zoom_expr}/2)*2':'trunc(1080*{zoom_expr}/2)*2':eval=frame,"
         f"crop=1920:1080:(iw-ow)/2:(ih-oh)/2[vmain]"
     )
 

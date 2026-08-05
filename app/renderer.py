@@ -47,7 +47,7 @@ class RenderJob:
     hook_text: str = ""
     video_info: VideoInfo | None = None
     channel_type: str = "tutorial"  # tutorial | gopro — affects rendering layout
-    gopro_layout: str = "classic"   # classic | orange_70_15_15
+    gopro_layout: str = "classic"   # classic | orange_70_15_15 (legacy id kept for style-2)
 
 
 @dataclass
@@ -254,6 +254,14 @@ class Renderer:
         part_num = int(match.group(1))
         pretty_base = base.replace("_", " ").strip()
         return f"{pretty_base} Part {part_num}"
+
+    def _format_caption_from_source_folder(self, input_path: Path) -> str:
+        """Build GoPro short caption from the parent folder name."""
+        folder_name = input_path.parent.name.strip()
+        if not folder_name:
+            return sanitize_filename(input_path.stem).replace("_", " ").strip().title()
+        # Preserve the folder label but make separators human-readable.
+        return folder_name.replace("_", " ").replace("-", " ").strip()
 
     @property
     def _has_subtitle_filter(self) -> bool:
@@ -595,20 +603,20 @@ class Renderer:
         filters: list[str] = []
         current_stream = "[0:v]"
 
-        # Alternate vlog/gopro layout: orange top/bottom bands (15% each),
-        # center video occupying 70% height, top caption, and bottom CTA+socials.
+        # Alternate vlog/gopro layout: orange top/bottom bands (20% each),
+        # center video occupying 60% height, top caption, and bottom CTA+socials.
         if job.channel_type == "gopro" and job.gopro_layout == "orange_70_15_15":
-            top_h = int(self.output_height * 0.15)
-            middle_h = int(self.output_height * 0.70)
+            top_h = int(self.output_height * 0.20)
+            middle_h = int(self.output_height * 0.60)
             bottom_h = self.output_height - top_h - middle_h
             smooth_zoom = "1.1+0.1*cos(2*PI*t/12)"
 
-            filters.append(f"color=c=#F7941D:s={self.output_width}x{self.output_height}:r={self.fps}[bg]")
+            filters.append(f"color=c=#FFB347:s={self.output_width}x{self.output_height}:r={self.fps}[bg]")
             filters.append(
                 f"{current_stream}scale={self.output_width}:{middle_h}:force_original_aspect_ratio=increase[fitmid]"
             )
             filters.append(
-                f"[fitmid]scale='trunc(iw*{smooth_zoom}/2)*2':'trunc(ih*{smooth_zoom}/2)*2',"
+                f"[fitmid]scale='trunc(iw*{smooth_zoom}/2)*2':'trunc(ih*{smooth_zoom}/2)*2':eval=frame,"
                 f"crop={self.output_width}:{middle_h}:(iw-ow)/2:(ih-oh)/2,setsar=1[mid]"
             )
             filters.append(f"[bg][mid]overlay=0:{top_h}[midbg]")
@@ -627,7 +635,7 @@ class Renderer:
                 current_stream = "[ctaed]"
 
             if job.overlay_path and job.overlay_path.exists() and overlay_input_idx is not None:
-                socials_w = max(120, int(self.output_width * self.branding_overlay_width_frac))
+                socials_w = max(320, int(self.output_width * max(self.branding_overlay_width_frac, 0.30)))
                 filters.append(
                     f"[{overlay_input_idx}:v]scale={socials_w}:-1,format=rgba,"
                     f"colorchannelmixer=aa={self.branding_overlay_opacity}[ovl]"
@@ -663,7 +671,7 @@ class Renderer:
                 # Pad to 9:16 with white background, video centered vertically
                 pad_filter = (
                     f"{current_stream}pad={self.output_width}:{self.output_height}"
-                    f":(ow-iw)/2:(oh-ih)/2:color=white[padded]"
+                    f":(ow-iw)/2:(oh-ih)/2:color=#FFB347[padded]"
                 )
                 filters.append(pad_filter)
                 current_stream = "[padded]"
@@ -782,8 +790,9 @@ class Renderer:
 
         # Add overlay image at bottom (social footer)
         if job.overlay_path and job.overlay_path.exists() and overlay_input_idx is not None:
+            overlay_w = max(320, int(self.output_width * max(self.branding_overlay_width_frac, 0.30))) if job.channel_type == "gopro" else max(120, int(self.output_width * self.branding_overlay_width_frac))
             overlay_scale = (
-                f"[{overlay_input_idx}:v]scale={max(120, int(self.output_width * self.branding_overlay_width_frac))}:-1,"
+                f"[{overlay_input_idx}:v]scale={overlay_w}:-1,"
                 f"format=rgba,colorchannelmixer=aa={self.branding_overlay_opacity}[ovl]"
             )
             filters.append(overlay_scale)
@@ -882,7 +891,7 @@ class Renderer:
                 subtitle_path=sub_path,
                 overlay_path=overlay_path,
                 hook_text=(
-                    self._format_caption_from_output_filename(output_path)
+                    self._format_caption_from_source_folder(video_path)
                     if channel_type == "gopro"
                     else (clip.hook_text or hook_text)
                 ),

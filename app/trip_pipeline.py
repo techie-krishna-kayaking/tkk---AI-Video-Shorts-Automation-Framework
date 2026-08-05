@@ -1763,7 +1763,7 @@ def create_platform_exports(
 ) -> PlatformExportResult:
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    yt_dir = output_dir / "YT"
+    yt_dir = output_dir / "yt"
     insta_dir = output_dir / "insta"
     yt_dir.mkdir(parents=True, exist_ok=True)
     insta_dir.mkdir(parents=True, exist_ok=True)
