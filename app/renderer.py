@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import tempfile
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -174,10 +175,10 @@ class Renderer:
                 draw.text((x, y), ln, fill=(25, 25, 25, 255), font=chosen_font)
                 y += line_heights[i] + gap
 
-        # Save to temp file
+        # Save to temp file with UUID for uniqueness
         tmp_dir = Path(tempfile.gettempdir()) / "shorts_render"
         tmp_dir.mkdir(exist_ok=True)
-        header_path = tmp_dir / f"header_{os.getpid()}.png"
+        header_path = tmp_dir / f"header_{uuid.uuid4().hex}.png"
         img.save(str(header_path))
         self._temp_files.append(header_path)
         return header_path
@@ -239,7 +240,7 @@ class Renderer:
 
         tmp_dir = Path(tempfile.gettempdir()) / "shorts_render"
         tmp_dir.mkdir(exist_ok=True)
-        cta_path = tmp_dir / f"cta_{os.getpid()}.png"
+        cta_path = tmp_dir / f"cta_{uuid.uuid4().hex}.png"
         img.save(str(cta_path))
         self._temp_files.append(cta_path)
         return cta_path
