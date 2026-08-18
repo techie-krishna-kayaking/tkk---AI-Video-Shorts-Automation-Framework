@@ -647,7 +647,7 @@ def create_hyperlapse_merge(
         _apply_hyperlapse_video_caption(
             source_video=merged_videos_path,
             output_video=captioned_video_part,
-            caption_text="Blessed to serve the Lordships at ISKCON NRJD",
+            caption_text="Blessed to serve the Lordships at ISKCON Magadi Road (NRJD)",
             width=width,
         )
 
@@ -1760,12 +1760,14 @@ def create_platform_exports(
     short_clips: list[Path],
     output_dir: Path,
     music_only: bool = False,
+    insta_only: bool = False,
 ) -> PlatformExportResult:
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    yt_dir = output_dir / "yt"
+    yt_dir = output_dir / "yt" if not insta_only else None
     insta_dir = output_dir / "insta"
-    yt_dir.mkdir(parents=True, exist_ok=True)
+    if yt_dir:
+        yt_dir.mkdir(parents=True, exist_ok=True)
     insta_dir.mkdir(parents=True, exist_ok=True)
 
     config = get_config()
@@ -1779,42 +1781,47 @@ def create_platform_exports(
     mixed_tracks: list[dict[str, Any]] = []
 
     for idx, short_clip in enumerate(short_clips):
-        yt_out = yt_dir / f"{short_clip.stem}.mp4"
         bg_offset_seconds = float(idx * 30)
 
-        if music_only and yt_bg_tracks:
-            # YouTube short: drop raw audio, use the YT music pool.
-            yt_track = yt_bg_tracks[idx % len(yt_bg_tracks)] if len(yt_bg_tracks) > 1 else yt_bg_tracks[0]
-            ok, error = _add_background_music(
-                source_clip=short_clip,
-                destination_clip=yt_out,
-                bg_track=yt_track,
-                bg_volume=bg_volume,
-                bg_offset_seconds=bg_offset_seconds,
-            )
-            if ok:
-                mixed_tracks.append(
-                    {
-                        "clip": str(yt_out),
-                        "platform": "youtube",
-                        "bg_track": str(yt_track),
-                        "bg_volume": bg_volume,
-                        "bg_offset_seconds": bg_offset_seconds,
-                    }
+        # YouTube export: skip entirely if insta_only mode
+        yt_out = None
+        if not insta_only:
+            yt_out = yt_dir / f"{short_clip.stem}.mp4"
+            if music_only and yt_bg_tracks:
+                # YouTube short: drop raw audio, use the YT music pool.
+                yt_track = yt_bg_tracks[idx % len(yt_bg_tracks)] if len(yt_bg_tracks) > 1 else yt_bg_tracks[0]
+                ok, error = _add_background_music(
+                    source_clip=short_clip,
+                    destination_clip=yt_out,
+                    bg_track=yt_track,
+                    bg_volume=bg_volume,
+                    bg_offset_seconds=bg_offset_seconds,
                 )
+                if ok:
+                    mixed_tracks.append(
+                        {
+                            "clip": str(yt_out),
+                            "platform": "youtube",
+                            "bg_track": str(yt_track),
+                            "bg_volume": bg_volume,
+                            "bg_offset_seconds": bg_offset_seconds,
+                        }
+                    )
+                else:
+                    logger.warning("yt_bgm_mix_failed", clip=str(yt_out), error=error)
+                    shutil.copy2(short_clip, yt_out)
             else:
-                logger.warning("yt_bgm_mix_failed", clip=str(yt_out), error=error)
+                # Default: keep the rendered short's (raw) audio for YouTube.
                 shutil.copy2(short_clip, yt_out)
-        else:
-            # Default: keep the rendered short's (raw) audio for YouTube.
-            shutil.copy2(short_clip, yt_out)
-        yt_exports.append(yt_out)
+            yt_exports.append(yt_out)
 
+        # Instagram export: source from yt_out if available, else directly from short_clip
         insta_out = insta_dir / f"{short_clip.stem}.mp4"
+        insta_source = yt_out if yt_out else short_clip
         if insta_bg_tracks:
             bg_track = insta_bg_tracks[idx % len(insta_bg_tracks)] if len(insta_bg_tracks) > 1 else insta_bg_tracks[0]
             ok, error = _add_background_music(
-                source_clip=yt_out,
+                source_clip=insta_source,
                 destination_clip=insta_out,
                 bg_track=bg_track,
                 bg_volume=bg_volume,
@@ -1901,13 +1908,13 @@ def create_platform_exports(
 
     logger.info(
         "platform_exports_complete",
-        youtube_count=len(yt_exports),
+        youtube_count=len(yt_exports) if not insta_only else 0,
         instagram_count=len(insta_exports),
         output=str(output_dir),
     )
 
     return PlatformExportResult(
-        youtube_exports=yt_exports,
+        youtube_exports=[] if insta_only else yt_exports,
         instagram_exports=insta_exports,
         source_shorts=short_clips,
         mixed_tracks=mixed_tracks,

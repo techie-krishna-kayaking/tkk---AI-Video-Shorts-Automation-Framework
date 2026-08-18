@@ -134,16 +134,17 @@
 python3 -m app.main flows
 
 # ── Run one YAML-defined flow ───────────────────────────────
-python3 -m app.main run-flow --flow camera_facing_long_form
-python3 -m app.main run-flow --flow camera_facing_short_form --max-clips 5 --fast
-python3 -m app.main run-flow --flow vlog_gopro_long_form
-python3 -m app.main run-flow --flow vlog_gopro_short_form_editing_style_1 --max-clips 8
-python3 -m app.main run-flow --flow vlog_gopro_short_form_editing_style_2 --max-clips 8
-python3 -m app.main run-flow --flow cooking_long_form
-python3 -m app.main run-flow --flow cooking_short_form
-python3 -m app.main run-flow --flow tutorial_long_form
-python3 -m app.main run-flow --flow tutorial_short_form --max-clips 6
-python3 -m app.main run-flow --flow hyperlapse_merge
+caffeinate -dimsu python3 -m app.main run-flow --flow camera_facing_long_form
+caffeinate -dimsu python3 -m app.main run-flow --flow camera_facing_short_form --max-clips 5 --fast
+caffeinate -dimsu python3 -m app.main run-flow --flow vlog_gopro_long_form
+caffeinate -dimsupython3 -m app.main run-flow --flow vlog_gopro_short_form_editing_style_1 --max-clips 8
+caffeinate -dimsu python3 -m app.main run-flow --flow vlog_gopro_short_form_editing_style_2 --max-clips 8
+caffeinate -dimsu python3 -m app.main run-flow --flow vlog_gopro_music_only_shorts
+caffeinate -dimsu python3 -m app.main run-flow --flow cooking_long_form
+caffeinate -dimsu python3 -m app.main run-flow --flow cooking_short_form
+caffeinate -dimsu python3 -m app.main run-flow --flow tutorial_long_form
+caffeinate -dimsu python3 -m app.main run-flow --flow tutorial_short_form --max-clips 6
+caffeinate -dimsu python3 -m app.main run-flow --flow hyperlapse_merge
 
 # ── macOS recommended (prevent sleep during long renders) ──────────────
 caffeinate -dimsu python3 -m app.main run-flow --flow vlog_gopro_long_form

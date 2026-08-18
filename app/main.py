@@ -412,34 +412,45 @@ def run_flow(
             rich_console.print(f"[yellow]No videos found in {input_path}[/yellow]")
             raise typer.Exit(0)
 
-        with _temporary_flow_channel(
-            flow_key=flow,
-            flow_cfg=flow_cfg,
-            channel_type="gopro",
-            vlog_shorts_editing=(flow_cfg.vlog_shorts_editing or "both"),
-        ) as (temp_channel_id, _):
-            short_clips: list[Path] = []
-            for idx, video in enumerate(videos, 1):
-                rich_console.print(f"\n[bold]({idx}/{len(videos)})[/bold] {video.name}")
-                out_files = process(
-                    video_path=video,
-                    channel=temp_channel_id,
-                    max_clips=max_clips,
-                    fast=fast,
-                    no_captions=False,
-                    no_upload=True,
+        _get_status_tracker().begin_channel(flow, len(videos), unit_label="Videos")
+        _reporter = _start_status_reporter()
+        if _reporter is not None:
+            rich_console.print("[cyan]Telegram reporter active for run-flow[/cyan]")
+
+        try:
+            with _temporary_flow_channel(
+                flow_key=flow,
+                flow_cfg=flow_cfg,
+                channel_type="gopro",
+                vlog_shorts_editing=(flow_cfg.vlog_shorts_editing or "both"),
+            ) as (temp_channel_id, _):
+                short_clips: list[Path] = []
+                for idx, video in enumerate(videos, 1):
+                    rich_console.print(f"\n[bold]({idx}/{len(videos)})[/bold] {video.name}")
+                    out_files = process(
+                        video_path=video,
+                        channel=temp_channel_id,
+                        max_clips=max_clips,
+                        fast=fast,
+                        no_captions=False,
+                        no_upload=True,
+                        skip_smart_crop=True,
+                    )
+                    short_clips.extend(out_files)
+                    _get_status_tracker().unit_done(shorts_added=len(out_files))
+
+                if not short_clips:
+                    rich_console.print("[yellow]No shorts generated from source videos.[/yellow]")
+                    raise typer.Exit(0)
+
+                exports = create_platform_exports(
+                    short_clips=short_clips,
+                    output_dir=output_path,
+                    music_only=True,
+                    insta_only=True,
                 )
-                short_clips.extend(out_files)
-
-            if not short_clips:
-                rich_console.print("[yellow]No shorts generated from source videos.[/yellow]")
-                raise typer.Exit(0)
-
-            exports = create_platform_exports(
-                short_clips=short_clips,
-                output_dir=output_path,
-                music_only=True,
-            )
+        finally:
+            _stop_status_reporter()
 
         rich_console.print("\n[bold green]Done.[/bold green] Music-only shorts flow completed.")
         rich_console.print(f"  YouTube exports:   {len(exports.youtube_exports)}")
@@ -452,6 +463,11 @@ def run_flow(
             rich_console.print(f"[yellow]No videos found in {input_path}[/yellow]")
             raise typer.Exit(0)
 
+        _get_status_tracker().begin_channel(flow, len(videos), unit_label="Videos")
+        _reporter = _start_status_reporter()
+        if _reporter is not None:
+            rich_console.print("[cyan]Telegram reporter active for run-flow[/cyan]")
+
         channel_type = "gopro" if "vlog_gopro" in flow_type else "tutorial"
         gopro_mode = "editing2" if flow_type.endswith("style_2") else "editing1"
         short_name_suffix = ""
@@ -460,28 +476,32 @@ def run_flow(
         elif flow_type == "vlog_gopro_short_form_editing_style_2":
             short_name_suffix = "_style2"
 
-        with _temporary_flow_channel(
-            flow_key=flow,
-            flow_cfg=flow_cfg,
-            channel_type=channel_type,
-            vlog_shorts_editing=gopro_mode,
-        ) as (temp_channel_id, _):
-            rendered_count = 0
-            for idx, video in enumerate(videos, 1):
-                rich_console.print(f"\n[bold]({idx}/{len(videos)})[/bold] {video.name}")
-                output_name_override = None
-                if short_name_suffix and channel_type == "gopro":
-                    output_name_override = f"{sanitize_filename(video.stem)}{short_name_suffix}"
-                out_files = process(
-                    video_path=video,
-                    channel=temp_channel_id,
-                    max_clips=max_clips,
-                    fast=fast,
-                    no_captions=False,
-                    no_upload=True,
-                    output_name_override=output_name_override,
-                )
-                rendered_count += len(out_files)
+        try:
+            with _temporary_flow_channel(
+                flow_key=flow,
+                flow_cfg=flow_cfg,
+                channel_type=channel_type,
+                vlog_shorts_editing=gopro_mode,
+            ) as (temp_channel_id, _):
+                rendered_count = 0
+                for idx, video in enumerate(videos, 1):
+                    rich_console.print(f"\n[bold]({idx}/{len(videos)})[/bold] {video.name}")
+                    output_name_override = None
+                    if short_name_suffix and channel_type == "gopro":
+                        output_name_override = f"{sanitize_filename(video.stem)}{short_name_suffix}"
+                    out_files = process(
+                        video_path=video,
+                        channel=temp_channel_id,
+                        max_clips=max_clips,
+                        fast=fast,
+                        no_captions=False,
+                        no_upload=True,
+                        output_name_override=output_name_override,
+                    )
+                    rendered_count += len(out_files)
+                    _get_status_tracker().unit_done(shorts_added=len(out_files))
+        finally:
+            _stop_status_reporter()
 
         rich_console.print(f"\n[bold green]Done.[/bold green] Generated {rendered_count} short clips.")
         return
@@ -495,17 +515,26 @@ def run_flow(
             rich_console.print(f"[yellow]No subfolders with videos found in {input_path}[/yellow]")
             raise typer.Exit(0)
 
-        success = 0
-        for folder_name, videos in subfolders.items():
-            out_file = output_path / f"{folder_name}_LONG_FORM.mp4"
-            result = generate_longform(videos=videos, output_path=out_file, overlay_path=overlay_path)
-            if result.success:
-                success += 1
-                rich_console.print(f"  [green]✓[/green] {out_file.name}")
-            else:
-                rich_console.print(f"  [red]✗[/red] {out_file.name}")
-                for err in result.errors:
-                    rich_console.print(f"    - {err}")
+        _get_status_tracker().begin_channel(flow, len(subfolders), unit_label="Folders")
+        _reporter = _start_status_reporter()
+        if _reporter is not None:
+            rich_console.print("[cyan]Telegram reporter active for run-flow[/cyan]")
+
+        try:
+            success = 0
+            for folder_name, videos in subfolders.items():
+                out_file = output_path / f"{folder_name}_LONG_FORM.mp4"
+                result = generate_longform(videos=videos, output_path=out_file, overlay_path=overlay_path)
+                if result.success:
+                    success += 1
+                    rich_console.print(f"  [green]✓[/green] {out_file.name}")
+                else:
+                    rich_console.print(f"  [red]✗[/red] {out_file.name}")
+                    for err in result.errors:
+                        rich_console.print(f"    - {err}")
+                _get_status_tracker().unit_done(long_added=1 if result.success else 0)
+        finally:
+            _stop_status_reporter()
 
         rich_console.print(f"\n[bold green]Done.[/bold green] Long-form outputs created: {success}/{len(subfolders)}")
         return
@@ -692,6 +721,7 @@ def process(
     no_upload: bool = typer.Option(False, "--no-upload", help="Skip upload even if enabled."),
     render_workers: Optional[int] = None,
     output_name_override: Optional[str] = None,
+    skip_smart_crop: bool = False,
 ) -> list[Path]:
     """Process a single video and generate shorts/reels."""
     _init()
@@ -857,10 +887,7 @@ def process(
         elif not no_captions and config.captions.enabled:
             rich_console.print("  [yellow]Captions skipped due to transcription failure.[/yellow]")
 
-    # Step 4: Render clips
-    rich_console.print("\n[bold]Step 4:[/bold] Rendering clips...")
-    renderer = Renderer()
-
+    # Initialize renderer with channel-aware configuration
     # Get overlay/socials from channel config
     overlay_path: Path | None = None
     hook_text = ""
@@ -886,6 +913,11 @@ def process(
                 gopro_editing_mode = "editing1"
                 gopro_layout = "classic"
 
+    # Step 4: Render clips (now that channel_type is known)
+    rich_console.print("\n[bold]Step 4:[/bold] Rendering clips...")
+    # Skip SmartCrop initialization for gopro flows (not needed; already handled by channel_type logic)
+    renderer = Renderer(skip_smart_crop=(skip_smart_crop or channel_type == "gopro"))
+
     max_workers = max(1, int(render_workers) if render_workers else int(getattr(config.processing, "max_workers", 4)))
 
     with create_progress() as progress:
@@ -908,7 +940,7 @@ def process(
             results_map: dict[int, list] = {}
 
             def _render_single(idx: int, clip):
-                local_renderer = Renderer()
+                local_renderer = Renderer(skip_smart_crop=(skip_smart_crop or channel_type == "gopro"))
                 return local_renderer.render_clips(
                     video_path=video_path,
                     clips=[clip],
@@ -939,7 +971,7 @@ def process(
             # Render each style in a separate deterministic pass so part-numbering
             # is stable and both styles are always produced for every selected clip.
             for variant_name, variant_layout in render_variants:
-                local_renderer = Renderer()
+                local_renderer = Renderer(skip_smart_crop=(skip_smart_crop or channel_type == "gopro"))
                 variant_results = local_renderer.render_clips(
                     video_path=video_path,
                     clips=selection.clips,

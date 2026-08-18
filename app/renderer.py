@@ -74,7 +74,7 @@ class Renderer:
     - GPU acceleration
     """
 
-    def __init__(self):
+    def __init__(self, skip_smart_crop: bool = False):
         config = get_config()
         self.output_width = config.video.output_width
         self.output_height = config.video.output_height
@@ -86,7 +86,7 @@ class Renderer:
         self.gpu_available = check_gpu_available() and config.rendering.gpu_enabled
         self.gpu_encoder = config.rendering.gpu_encoder
         self.cpu_encoder = config.rendering.cpu_encoder
-        self.smart_crop = SmartCrop()
+        self.smart_crop = SmartCrop() if not skip_smart_crop else None
         self._temp_links: list[Path] = []
         self._temp_files: list[Path] = []
         self._audio_stream_cache: dict[str, bool] = {}
