@@ -318,11 +318,12 @@ class Renderer:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=300,
             )
 
             if result.returncode != 0:
                 logger.error("render_failed", error=result.stderr[-500:])
+                # Avoid leaving partial MP4 files that players cannot open.
+                job.output_path.unlink(missing_ok=True)
                 return RenderResult(
                     output_path=job.output_path,
                     success=False,
@@ -347,17 +348,9 @@ class Renderer:
                 file_size=file_size,
             )
 
-        except subprocess.TimeoutExpired:
-            logger.error("render_timeout", path=str(job.output_path))
-            return RenderResult(
-                output_path=job.output_path,
-                success=False,
-                duration=0,
-                file_size=0,
-                error="Render timed out after 300s",
-            )
         except Exception as e:
             logger.error("render_exception", error=str(e))
+            job.output_path.unlink(missing_ok=True)
             return RenderResult(
                 output_path=job.output_path,
                 success=False,

@@ -919,6 +919,9 @@ def process(
     renderer = Renderer(skip_smart_crop=(skip_smart_crop or channel_type == "gopro"))
 
     max_workers = max(1, int(render_workers) if render_workers else int(getattr(config.processing, "max_workers", 4)))
+    if channel_type == "gopro":
+        # Keep GoPro renders stable at high quality by avoiding heavy parallel contention.
+        max_workers = min(max_workers, 1)
 
     with create_progress() as progress:
         render_variants: list[tuple[str, str]] = [(video_name, gopro_layout)]
