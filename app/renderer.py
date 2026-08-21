@@ -16,6 +16,7 @@ from PIL import Image, ImageDraw, ImageFont
 from app.clip_selector import Clip
 from app.detector import AspectRatio, VideoInfo
 from app.smart_crop import CropRegion, SmartCrop
+from app.transcriber import Transcriber, Transcription
 from app.utils.config import get_config
 from app.utils.files import check_gpu_available, get_clip_filename, get_next_part_number, probe_video, sanitize_filename
 from app.utils.logging import get_logger
@@ -49,6 +50,9 @@ class RenderJob:
     video_info: VideoInfo | None = None
     channel_type: str = "tutorial"  # tutorial | gopro — affects rendering layout
     gopro_layout: str = "classic"   # classic | orange_70_15_15 (legacy id kept for style-2)
+    caption_line1: str = ""  # Hardcoded caption line 1 (e.g., "DAILY VLOG - IT ENGINEER")
+    caption_line2: str = ""  # Hardcoded caption line 2 (e.g., "KTM DUKE 390")
+    transcription: Transcription | None = None  # Extracted subtitles with word timing
 
 
 @dataclass
@@ -130,50 +134,100 @@ class Renderer:
             lines.append(current)
         return lines
 
-    def _generate_header_image(self, text: str, hook_text: str = "", width: int = 1080, height: int = 380) -> Path:
-        """Generate a transparent PNG with clip name (auto-wrapped/auto-shrunk) at top."""
+    def _generate_header_image(self, text: str, hook_text: str = "", width: int = 1080, height: int = 380, 
+                            caption_line1: str = "", caption_line2: str = "") -> Path:
+        """Generate a transparent PNG with captions.
+        
+        If caption_line1/2 provided, use those (hardcoded); otherwise use hook_text or text.
+        """
         img = Image.new("RGBA", (width, height), (255, 255, 255, 0))
         draw = ImageDraw.Draw(img)
 
         font_path = Path("assets/fonts/Montserrat-Bold.ttf")
-        # Title is shown in ALL CAPS, larger, across up to 3 lines.
-        display_text = hook_text.strip().upper() if hook_text else ""
-
-        if display_text:
-            max_text_width = width - 60  # 30px padding each side
-            lines: list[str] = [display_text]
+        
+        # Use hardcoded captions if provided, otherwise derive from text/hook_text
+        if caption_line1 or caption_line2:
+            # Hardcoded caption mode: 2 lines
+            lines = [caption_line1.strip().upper(), caption_line2.strip().upper()]
             chosen_font = None
-
-            # Try decreasing font sizes until the text fits in at most 3 lines.
-            for font_size in (72, 66, 60, 54, 50, 46, 42, 38):
+            
+            # Try decreasing font sizes until both lines fit
+            for font_size in (56, 50, 46, 42, 38):
                 try:
                     font = ImageFont.truetype(str(font_path), font_size) if font_path.exists() else ImageFont.load_default()
                 except Exception:
                     font = ImageFont.load_default()
-                wrapped = self._wrap_text_to_width(draw, display_text, font, max_text_width)
+                
+                max_text_width = width - 60
+                fits = True
+                for ln in lines:
+                    wrapped = self._wrap_text_to_width(draw, ln, font, max_text_width)
+                    if len(wrapped) > 1:
+                        fits = False
+                        break
+                
                 chosen_font = font
-                lines = wrapped
-                if len(wrapped) <= 3:
+                if fits:
                     break
-
+            
             if chosen_font is None:
                 chosen_font = ImageFont.load_default()
-
-            # Cap to 3 lines, adding an ellipsis if the title is extremely long.
-            if len(lines) > 3:
-                lines = lines[:3]
-                lines[2] = lines[2].rstrip(".") + "…"
-
-            line_heights = [draw.textbbox((0, 0), ln, font=chosen_font)[3] - draw.textbbox((0, 0), ln, font=chosen_font)[1] for ln in lines]
-            gap = 12
-            total_h = sum(line_heights) + gap * (len(lines) - 1)
+            
+            # Render the two lines
+            line_heights = []
+            for ln in lines:
+                bb = draw.textbbox((0, 0), ln, font=chosen_font)
+                line_heights.append(bb[3] - bb[1])
+            
+            gap = 8
+            total_h = sum(line_heights) + gap
             y = max(16, (height - total_h) // 2)
+            
             for i, ln in enumerate(lines):
                 bb = draw.textbbox((0, 0), ln, font=chosen_font)
                 tw = bb[2] - bb[0]
                 x = (width - tw) // 2
                 draw.text((x, y), ln, fill=(25, 25, 25, 255), font=chosen_font)
                 y += line_heights[i] + gap
+        else:
+            # Dynamic caption mode (existing logic)
+            display_text = (hook_text or text).strip().upper() if (hook_text or text) else ""
+
+            if display_text:
+                max_text_width = width - 60  # 30px padding each side
+                lines: list[str] = [display_text]
+                chosen_font = None
+
+                # Try decreasing font sizes until the text fits in at most 3 lines.
+                for font_size in (72, 66, 60, 54, 50, 46, 42, 38):
+                    try:
+                        font = ImageFont.truetype(str(font_path), font_size) if font_path.exists() else ImageFont.load_default()
+                    except Exception:
+                        font = ImageFont.load_default()
+                    wrapped = self._wrap_text_to_width(draw, display_text, font, max_text_width)
+                    chosen_font = font
+                    lines = wrapped
+                    if len(wrapped) <= 3:
+                        break
+
+                if chosen_font is None:
+                    chosen_font = ImageFont.load_default()
+
+                # Cap to 3 lines, adding an ellipsis if the title is extremely long.
+                if len(lines) > 3:
+                    lines = lines[:3]
+                    lines[2] = lines[2].rstrip(".") + "…"
+
+                line_heights = [draw.textbbox((0, 0), ln, font=chosen_font)[3] - draw.textbbox((0, 0), ln, font=chosen_font)[1] for ln in lines]
+                gap = 12
+                total_h = sum(line_heights) + gap * (len(lines) - 1)
+                y = max(16, (height - total_h) // 2)
+                for i, ln in enumerate(lines):
+                    bb = draw.textbbox((0, 0), ln, font=chosen_font)
+                    tw = bb[2] - bb[0]
+                    x = (width - tw) // 2
+                    draw.text((x, y), ln, fill=(25, 25, 25, 255), font=chosen_font)
+                    y += line_heights[i] + gap
 
         # Save to temp file with UUID for uniqueness
         tmp_dir = Path(tempfile.gettempdir()) / "shorts_render"
@@ -263,6 +317,111 @@ class Renderer:
             return sanitize_filename(input_path.stem).replace("_", " ").strip().title()
         # Preserve the folder label but make separators human-readable.
         return folder_name.replace("_", " ").replace("-", " ").strip()
+
+    def _extract_transcription(self, video_path: Path, start: float = 0.0, end: float | None = None) -> Transcription | None:
+        """Extract transcription with word-level timing from video audio."""
+        try:
+            transcriber = Transcriber()
+            transcription = transcriber.transcribe(video_path)
+            
+            # Trim transcription to the segment start/end if needed
+            if start > 0 or end is not None:
+                trimmed_segments = []
+                for seg in transcription.segments:
+                    # Skip segments outside the range
+                    if end is not None and seg.start >= end:
+                        break
+                    if seg.end <= start:
+                        continue
+                    
+                    # Adjust segment timing relative to start
+                    adjusted_seg = seg
+                    adjusted_seg.start = max(0, seg.start - start)
+                    adjusted_seg.end = seg.end - start if end is None else min(seg.end - start, end - start)
+                    
+                    # Adjust word timing
+                    trimmed_words = []
+                    for word in seg.words:
+                        if word.end <= start or (end is not None and word.start >= end):
+                            continue
+                        w = word
+                        w.start = max(0, word.start - start)
+                        w.end = word.end - start if end is None else min(word.end - start, end - start)
+                        trimmed_words.append(w)
+                    
+                    if trimmed_words:
+                        adjusted_seg.words = trimmed_words
+                        trimmed_segments.append(adjusted_seg)
+                
+                transcription.segments = trimmed_segments
+            
+            return transcription
+        except Exception as e:
+            logger.warning("transcription_failed", video=str(video_path), error=str(e))
+            return None
+
+    def _build_subtitle_drawtext_filter(self, transcription: Transcription, start_y: int = 1536, max_width: int = 1000) -> str:
+        """Build FFmpeg drawtext filter for word-by-word subtitle highlighting.
+        
+        Args:
+            transcription: Transcription with word-level timing
+            start_y: Y position for subtitle text (pixels from top)
+            max_width: Maximum width for subtitle text
+        
+        Returns:
+            FFmpeg drawtext filter string
+        """
+        if not transcription or not transcription.segments:
+            return ""
+        
+        font_path = Path("assets/fonts/Roboto-Black.ttf")
+        if not font_path.exists():
+            # Fallback to any available font
+            font_path = Path("assets/fonts/Montserrat-Bold.ttf")
+        
+        font_arg = f":fontfile='{str(font_path).replace(':', '\\:')}'" if font_path.exists() else ""
+        
+        # Build drawtext command that highlights current word
+        # We'll create a complex filter that shows each word sequentially
+        filter_parts = []
+        
+        for seg_idx, segment in enumerate(transcription.segments):
+            if not segment.words:
+                continue
+            
+            for word_idx, word in enumerate(segment.words):
+                # Escape special characters in the word
+                escaped_word = (
+                    word.text.replace("\\", "\\\\")
+                    .replace("'", "\\'")
+                    .replace(":", "\\:")
+                    .replace(",", "\\,")
+                    .replace("%", "\\%")
+                )
+                
+                # Create drawtext for this word with timing
+                # Show this word from word.start to word.end
+                start_ms = int(word.start * 1000)
+                end_ms = int(word.end * 1000)
+                
+                drawtext_filter = (
+                    f"drawtext="
+                    f"text='{escaped_word}':"
+                    f"x=(w-text_w)/2:"
+                    f"y={start_y}:"
+                    f"fontsize=32:"
+                    f"fontcolor=black:"
+                    f"enable='between(t,{word.start},{word.end})':"
+                    f"text_shaping=1"
+                    f"{font_arg}"
+                )
+                filter_parts.append(drawtext_filter)
+        
+        # Chain all drawtext filters together
+        if not filter_parts:
+            return ""
+        
+        return ",".join(filter_parts)
 
     @property
     def _has_subtitle_filter(self) -> bool:
@@ -397,14 +556,22 @@ class Renderer:
             is_gopro_layout2
             or (job.video_info and job.video_info.aspect_ratio == AspectRatio.LANDSCAPE)
         ):
+            # Use hardcoded captions if provided
             header_path = self._generate_header_image(
                 "WATCH THE FULL VIDEO on YOUTUBE ▶",
                 hook_text=job.hook_text,
                 height=288 if is_gopro_layout2 else 380,
+                caption_line1=job.caption_line1,
+                caption_line2=job.caption_line2,
             )
             cmd.extend(["-i", str(header_path)])
             header_input_idx = input_count
             input_count += 1
+
+        # Extract transcription for subtitle burning (GoPro mode)
+        # TODO: Re-enable after fixing subtitle filter syntax
+        # if job.channel_type == "gopro" and job.transcription is None:
+        #     job.transcription = self._extract_transcription(job.input_path, job.start, job.end)
 
         # Add CTA image input (text + YouTube logo) for gopro mode
         cta_input_idx: int | None = None
@@ -430,7 +597,7 @@ class Renderer:
             cmd.extend(["-af", SHORTS_AUDIO_FILTER])
 
         # Encoding settings (shared with the tutorial render path)
-        cmd.extend(self._encode_args())
+        cmd.extend(self._encode_args(job))
 
         # Subtitle burning (if provided and not in filter)
         if job.subtitle_path and job.subtitle_path.exists():
@@ -440,15 +607,24 @@ class Renderer:
         cmd.append(str(job.output_path))
         return cmd
 
-    def _encode_args(self) -> list[str]:
-        """Shared video/audio encode arguments for the shorts render paths."""
+    def _encode_args(self, job: RenderJob | None = None) -> list[str]:
+        """Shared video/audio encode arguments for the shorts render paths.
+        
+        For GoPro content, uses input video fps to avoid resampling (faster, same quality).
+        For other content, uses configured fps (usually 30).
+        """
+        # Use input fps for GoPro to preserve quality and speed up encoding
+        target_fps = self.fps
+        if job and job.channel_type == "gopro" and job.video_info:
+            target_fps = job.video_info.fps
+        
         args = [
             "-c:v", self.encoder,
             "-preset", self.preset,
             "-c:a", "aac",
             "-b:a", self.audio_bitrate,
             "-ar", "48000",
-            "-r", str(self.fps),
+            "-r", str(target_fps),
             "-pix_fmt", "yuv420p",
             "-movflags", "+faststart",
         ]
@@ -588,7 +764,7 @@ class Renderer:
             fc.append("[ca]anull[aout]")
 
         cmd += ["-filter_complex", ";".join(fc), "-map", "[vout]", "-map", "[aout]"]
-        cmd += self._encode_args()
+        cmd += self._encode_args(job)
         cmd.append(str(job.output_path))
         return cmd
 
@@ -629,7 +805,8 @@ class Renderer:
                 current_stream = "[ctaed]"
 
             if job.overlay_path and job.overlay_path.exists() and overlay_input_idx is not None:
-                socials_w = max(320, int(self.output_width * max(self.branding_overlay_width_frac, 0.30)))
+                base_socials_w = max(320, int(self.output_width * max(self.branding_overlay_width_frac, 0.30)))
+                socials_w = min(int(self.output_width * 0.95), base_socials_w * 2)
                 filters.append(
                     f"[{overlay_input_idx}:v]scale={socials_w}:-1,format=rgba,"
                     f"colorchannelmixer=aa={self.branding_overlay_opacity}[ovl]"
@@ -638,6 +815,14 @@ class Renderer:
                     f"{current_stream}[ovl]overlay=(W-w)/2:H-h-{self.branding_shorts_bottom_margin}[overlaid]"
                 )
                 current_stream = "[overlaid]"
+
+            # TODO: Add subtitle drawtext filter if transcription available
+            # if job.transcription and job.transcription.segments:
+            #     subtitle_y = top_h + middle_h + 20
+            #     subtitle_filter = self._build_subtitle_drawtext_filter(job.transcription, start_y=subtitle_y)
+            #     if subtitle_filter:
+            #         filters.append(f"{current_stream}{subtitle_filter}[subtitled]")
+            #         current_stream = "[subtitled]"
 
             if filters:
                 last_filter = filters[-1]
@@ -784,7 +969,11 @@ class Renderer:
 
         # Add overlay image at bottom (social footer)
         if job.overlay_path and job.overlay_path.exists() and overlay_input_idx is not None:
-            overlay_w = max(320, int(self.output_width * max(self.branding_overlay_width_frac, 0.30))) if job.channel_type == "gopro" else max(120, int(self.output_width * self.branding_overlay_width_frac))
+            if job.channel_type == "gopro":
+                base_overlay_w = max(320, int(self.output_width * max(self.branding_overlay_width_frac, 0.30)))
+                overlay_w = min(int(self.output_width * 0.95), base_overlay_w * 2)
+            else:
+                overlay_w = max(120, int(self.output_width * self.branding_overlay_width_frac))
             overlay_scale = (
                 f"[{overlay_input_idx}:v]scale={overlay_w}:-1,"
                 f"format=rgba,colorchannelmixer=aa={self.branding_overlay_opacity}[ovl]"
@@ -825,6 +1014,8 @@ class Renderer:
         hook_text: str = "",
         channel_type: str = "tutorial",
         gopro_layout: str = "classic",
+        caption_line1: str = "",
+        caption_line2: str = "",
     ) -> list[RenderResult]:
         """
         Render multiple clips from a video.
@@ -892,6 +1083,8 @@ class Renderer:
                 video_info=video_info,
                 channel_type=channel_type,
                 gopro_layout=gopro_layout,
+                caption_line1=caption_line1,
+                caption_line2=caption_line2,
             )
 
             result = self.render_clip(job)

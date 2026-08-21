@@ -435,6 +435,8 @@ def run_flow(
                         no_captions=False,
                         no_upload=True,
                         skip_smart_crop=True,
+                        caption_line1="DAILY VLOG - IT ENGINEER",
+                        caption_line2="KTM DUKE 390",
                     )
                     short_clips.extend(out_files)
                     _get_status_tracker().unit_done(shorts_added=len(out_files))
@@ -497,6 +499,8 @@ def run_flow(
                         no_captions=False,
                         no_upload=True,
                         output_name_override=output_name_override,
+                        caption_line1="DAILY VLOG - IT ENGINEER" if channel_type == "gopro" else "",
+                        caption_line2="KTM DUKE 390" if channel_type == "gopro" else "",
                     )
                     rendered_count += len(out_files)
                     _get_status_tracker().unit_done(shorts_added=len(out_files))
@@ -722,6 +726,8 @@ def process(
     render_workers: Optional[int] = None,
     output_name_override: Optional[str] = None,
     skip_smart_crop: bool = False,
+    caption_line1: str = "",
+    caption_line2: str = "",
 ) -> list[Path]:
     """Process a single video and generate shorts/reels."""
     _init()
@@ -939,37 +945,25 @@ def process(
         results = []
 
         if len(render_variants) == 1:
+            # Single-style render: process all selected clips in one renderer call
+            # to avoid repeated setup and per-clip orchestration overhead.
             variant_name, variant_layout = render_variants[0]
-            results_map: dict[int, list] = {}
-
-            def _render_single(idx: int, clip):
-                local_renderer = Renderer(skip_smart_crop=(skip_smart_crop or channel_type == "gopro"))
-                return local_renderer.render_clips(
-                    video_path=video_path,
-                    clips=[clip],
-                    video_info=video_info,
-                    output_dir=output_dir,
-                    output_name=variant_name,
-                    subtitle_paths={0: subtitle_paths[idx]} if idx in subtitle_paths else None,
-                    overlay_path=overlay_path,
-                    hook_text=hook_text,
-                    channel_type=channel_type,
-                    gopro_layout=variant_layout,
-                )
-
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                future_map = {
-                    executor.submit(_render_single, idx, clip): idx
-                    for idx, clip in enumerate(selection.clips)
-                }
-
-                for future in as_completed(future_map):
-                    idx = future_map[future]
-                    results_map[idx] = future.result()
-                    progress.advance(task)
-
-            for idx in range(len(selection.clips)):
-                results.extend(results_map.get(idx, []))
+            variant_results = renderer.render_clips(
+                video_path=video_path,
+                clips=selection.clips,
+                video_info=video_info,
+                output_dir=output_dir,
+                output_name=variant_name,
+                subtitle_paths=subtitle_paths if subtitle_paths else None,
+                overlay_path=overlay_path,
+                hook_text=hook_text,
+                channel_type=channel_type,
+                gopro_layout=variant_layout,
+                caption_line1=caption_line1,
+                caption_line2=caption_line2,
+            )
+            results.extend(variant_results)
+            progress.advance(task, advance=len(selection.clips))
         else:
             # Render each style in a separate deterministic pass so part-numbering
             # is stable and both styles are always produced for every selected clip.
@@ -986,6 +980,8 @@ def process(
                     hook_text=hook_text,
                     channel_type=channel_type,
                     gopro_layout=variant_layout,
+                    caption_line1=caption_line1,
+                    caption_line2=caption_line2,
                 )
                 results.extend(variant_results)
                 progress.advance(task, advance=len(selection.clips))
