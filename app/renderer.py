@@ -53,6 +53,10 @@ class RenderJob:
     caption_line1: str = ""  # Hardcoded caption line 1 (e.g., "DAILY VLOG - IT ENGINEER")
     caption_line2: str = ""  # Hardcoded caption line 2 (e.g., "KTM DUKE 390")
     transcription: Transcription | None = None  # Extracted subtitles with word timing
+    bg_music_track: Path | None = None
+    bg_music_volume: float = 0.55
+    bg_music_offset_seconds: float = 0.0
+    drop_source_audio: bool = False
 
 
 @dataclass
@@ -584,17 +588,53 @@ class Renderer:
             cta_input_idx = input_count
             input_count += 1
 
+        bg_music_input_idx: int | None = None
+        if job.bg_music_track and job.bg_music_track.exists():
+            cmd.extend(["-stream_loop", "-1"])
+            if job.bg_music_offset_seconds > 0:
+                cmd.extend(["-ss", f"{job.bg_music_offset_seconds:.3f}"])
+            cmd.extend(["-i", str(job.bg_music_track)])
+            bg_music_input_idx = input_count
+            input_count += 1
+
         # Build filter complex
         filters = self._build_filter_complex(job, input_count, header_input_idx=header_input_idx, overlay_input_idx=overlay_input_idx, cta_input_idx=cta_input_idx)
+        has_source_audio = self._input_has_audio(job.input_path)
+        has_bgm = bg_music_input_idx is not None
+
+        if has_bgm:
+            bg_gain = max(0.0, min(float(job.bg_music_volume), 1.0))
+            if has_source_audio and not job.drop_source_audio:
+                audio_filter = (
+                    f"[0:a]aformat=sample_fmts=fltp:channel_layouts=stereo,aresample=48000[srca];"
+                    f"[{bg_music_input_idx}:a]aformat=sample_fmts=fltp:channel_layouts=stereo,aresample=48000,"
+                    f"highpass=f=40,volume={bg_gain:.3f}[bga];"
+                    "[srca][bga]amix=inputs=2:duration=first:dropout_transition=2,alimiter=limit=0.95[aout]"
+                )
+            else:
+                audio_filter = (
+                    f"[{bg_music_input_idx}:a]aformat=sample_fmts=fltp:channel_layouts=stereo,aresample=48000,"
+                    f"highpass=f=40,volume={bg_gain:.3f},alimiter=limit=0.95[aout]"
+                )
+            filters = f"{filters};{audio_filter}" if filters else audio_filter
 
         if filters:
             cmd.extend(["-filter_complex", filters])
-            cmd.extend(["-map", "[vout]", "-map", "0:a?"])
+            cmd.extend(["-map", "[vout]"])
+            if has_bgm:
+                cmd.extend(["-map", "[aout]"])
+            elif has_source_audio:
+                cmd.extend(["-map", "0:a"])
         else:
-            cmd.extend(["-map", "0:v", "-map", "0:a?"])
+            cmd.extend(["-map", "0:v"])
+            if has_source_audio:
+                cmd.extend(["-map", "0:a"])
 
-        if self._input_has_audio(job.input_path):
+        if has_source_audio and not has_bgm:
             cmd.extend(["-af", SHORTS_AUDIO_FILTER])
+
+        if has_bgm:
+            cmd.append("-shortest")
 
         # Encoding settings (shared with the tutorial render path)
         cmd.extend(self._encode_args(job))
@@ -780,8 +820,11 @@ class Renderer:
             middle_h = int(self.output_height * 0.60)
             bottom_h = self.output_height - top_h - middle_h
             smooth_zoom = "1.1+0.1*cos(2*PI*t/12)"
+            clip_duration = max(0.1, float(job.end) - float(job.start))
 
-            filters.append(f"color=c=#FFB347:s={self.output_width}x{self.output_height}:r={self.fps}[bg]")
+            filters.append(
+                f"color=c=#FFB347:s={self.output_width}x{self.output_height}:r={self.fps}:d={clip_duration:.3f}[bg]"
+            )
             filters.append(
                 f"{current_stream}scale={self.output_width}:{middle_h}:force_original_aspect_ratio=increase[fitmid]"
             )
@@ -1016,6 +1059,9 @@ class Renderer:
         gopro_layout: str = "classic",
         caption_line1: str = "",
         caption_line2: str = "",
+        bg_music_tracks: list[Path] | None = None,
+        bg_music_volume: float = 0.55,
+        music_only_audio: bool = False,
     ) -> list[RenderResult]:
         """
         Render multiple clips from a video.
@@ -1066,6 +1112,9 @@ class Renderer:
                     clip_crop = crop  # Fallback to global crop
 
             sub_path = subtitle_paths.get(idx) if subtitle_paths else None
+            bg_track = None
+            if bg_music_tracks:
+                bg_track = bg_music_tracks[idx % len(bg_music_tracks)]
 
             job = RenderJob(
                 input_path=video_path,
@@ -1085,6 +1134,10 @@ class Renderer:
                 gopro_layout=gopro_layout,
                 caption_line1=caption_line1,
                 caption_line2=caption_line2,
+                bg_music_track=bg_track,
+                bg_music_volume=bg_music_volume,
+                bg_music_offset_seconds=max(0.0, float(clip.start)),
+                drop_source_audio=music_only_audio,
             )
 
             result = self.render_clip(job)

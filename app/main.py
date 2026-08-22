@@ -159,6 +159,26 @@ def _count_source_videos(folder: Path, extensions: list[str]) -> int:
     )
 
 
+def _discover_local_bgm_tracks(subdir: str | None = None) -> list[Path]:
+    """Find BGM files under assets/bgmusic (optionally in a subfolder)."""
+    base = Path("assets") / "bgmusic"
+    extensions = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
+
+    def _collect(folder: Path, recursive: bool) -> list[Path]:
+        if not folder.exists():
+            return []
+        entries = folder.rglob("*") if recursive else folder.glob("*")
+        return [p for p in sorted(entries) if p.is_file() and p.suffix.lower() in extensions]
+
+    if subdir:
+        tracks = _collect(base / subdir, recursive=True)
+        if tracks:
+            return tracks
+        return _collect(base, recursive=False)
+
+    return _collect(base, recursive=False)
+
+
 def _longform_status(longform_path: Path) -> str:
     """Return longform integrity status: ok, corrupt, or missing."""
     if not longform_path.exists():
@@ -411,6 +431,12 @@ def run_flow(
         if not videos:
             rich_console.print(f"[yellow]No videos found in {input_path}[/yellow]")
             raise typer.Exit(0)
+        insta_bg_tracks = _discover_local_bgm_tracks("insta")
+        if not insta_bg_tracks:
+            rich_console.print(
+                "[bold red]No background tracks found in assets/bgmusic/insta or assets/bgmusic.[/bold red]"
+            )
+            raise typer.Exit(1)
 
         _get_status_tracker().begin_channel(flow, len(videos), unit_label="Videos")
         _reporter = _start_status_reporter()
@@ -432,11 +458,14 @@ def run_flow(
                         channel=temp_channel_id,
                         max_clips=max_clips,
                         fast=fast,
-                        no_captions=False,
+                        no_captions=True,
                         no_upload=True,
                         skip_smart_crop=True,
-                        caption_line1="DAILY VLOG - IT ENGINEER",
+                        caption_line1="DAILY VLOG",
                         caption_line2="KTM DUKE 390",
+                        bg_music_tracks=insta_bg_tracks,
+                        bg_music_volume=0.55,
+                        music_only_audio=True,
                     )
                     short_clips.extend(out_files)
                     _get_status_tracker().unit_done(shorts_added=len(out_files))
@@ -444,19 +473,11 @@ def run_flow(
                 if not short_clips:
                     rich_console.print("[yellow]No shorts generated from source videos.[/yellow]")
                     raise typer.Exit(0)
-
-                exports = create_platform_exports(
-                    short_clips=short_clips,
-                    output_dir=output_path,
-                    music_only=True,
-                    insta_only=True,
-                )
         finally:
             _stop_status_reporter()
 
         rich_console.print("\n[bold green]Done.[/bold green] Music-only shorts flow completed.")
-        rich_console.print(f"  YouTube exports:   {len(exports.youtube_exports)}")
-        rich_console.print(f"  Instagram exports: {len(exports.instagram_exports)}")
+        rich_console.print(f"  Shorts rendered: {len(short_clips)}")
         return
 
     if flow_type in shortform_types:
@@ -728,6 +749,9 @@ def process(
     skip_smart_crop: bool = False,
     caption_line1: str = "",
     caption_line2: str = "",
+    bg_music_tracks: Optional[list[Path]] = None,
+    bg_music_volume: float = 0.55,
+    music_only_audio: bool = False,
 ) -> list[Path]:
     """Process a single video and generate shorts/reels."""
     _init()
@@ -961,6 +985,9 @@ def process(
                 gopro_layout=variant_layout,
                 caption_line1=caption_line1,
                 caption_line2=caption_line2,
+                bg_music_tracks=bg_music_tracks,
+                bg_music_volume=bg_music_volume,
+                music_only_audio=music_only_audio,
             )
             results.extend(variant_results)
             progress.advance(task, advance=len(selection.clips))
@@ -982,6 +1009,9 @@ def process(
                     gopro_layout=variant_layout,
                     caption_line1=caption_line1,
                     caption_line2=caption_line2,
+                    bg_music_tracks=bg_music_tracks,
+                    bg_music_volume=bg_music_volume,
+                    music_only_audio=music_only_audio,
                 )
                 results.extend(variant_results)
                 progress.advance(task, advance=len(selection.clips))

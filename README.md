@@ -183,6 +183,7 @@ This section documents the current type-based behavior implemented in the codeba
 - Typical structure:
   - Camera/Tutorial short-form: `<flow_output>/..._partNNN.mp4`
   - Vlog GoPro short-form style1/style2: `<flow_output>/..._partNNN.mp4`
+  - Vlog GoPro music-only shorts: `<flow_output>/..._partNNN.mp4` (single-pass render, no subtitles, BGM-only audio from `assets/bgmusic/insta`)
   - Vlog GoPro long-form: `<flow_output>/<subfolder>_full.mp4`
   - Camera long-form: `<flow_output>/..._camera_longform.mp4`
   - Tutorial long-form: `<flow_output>/..._tutorial_longform.mp4`
